@@ -6,14 +6,15 @@ import { button, h2, muted } from "./styles";
 export interface AnalyzeOpts {
   cx?: number;
   cy?: number;
-  hitTs: number;
+  /** 用户标注的动作"大致开始"时间（视频秒）；后端在其后自动定位击球帧 */
+  startTs: number;
   strokeType: string;
   preview: boolean;
 }
 
 interface PlayerPickerProps {
   file: File;
-  /** 确认分析：hitTs 为击球瞬间（视频秒），strokeType 为动作类型，cx/cy 为球员像素坐标（可空） */
+  /** 确认分析：startTs 为动作大致开始处（视频秒），strokeType 为动作类型，cx/cy 为球员像素坐标（可空） */
   onConfirm: (opts: AnalyzeOpts) => void;
 }
 
@@ -74,11 +75,11 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
   };
 
   const handleConfirm = () => {
-    const hitTs = videoRef.current?.currentTime ?? 0;
+    const startTs = videoRef.current?.currentTime ?? 0;
     onConfirm({
       cx: picked?.cx,
       cy: picked?.cy,
-      hitTs,
+      startTs,
       strokeType,
       preview,
     });
@@ -86,9 +87,11 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      <h2 style={h2}>第 2 步 · 选择动作并定位击球瞬间</h2>
+      <h2 style={h2}>第 2 步 · 选择动作并拖到动作开始处</h2>
       <p style={muted}>
-        先选择动作类型，再拖动进度条到<b>击球瞬间</b>，然后点击画面中要分析的球员
+        先选择动作类型，再拖动进度条到动作<b>大致开始</b>的位置
+        （发球即抛球前后、正反手即开始引拍处）——<b>不需要对准击球瞬间</b>，
+        系统会自动在随后的片段里找到击球点。然后点击画面中要分析的球员
         （多人时；只有一个人可跳过点选），最后点确认。
       </p>
 
@@ -146,7 +149,7 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
       </label>
 
       <button type="button" style={button} onClick={handleConfirm}>
-        确认当前画面为击球瞬间，开始分析
+        动作从这里开始，自动定位击球点并分析
       </button>
       <p style={{ ...muted, marginTop: 12, fontSize: 13 }}>
         {preview

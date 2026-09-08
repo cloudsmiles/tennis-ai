@@ -18,19 +18,19 @@ class JobManager:
         self._lock = threading.Lock()
 
     def create(self, video_src_path, filename, target_player=None, skip_llm=False,
-               hit_ts=None, stroke_type=None) -> str:
+               start_ts=None, stroke_type=None) -> str:
         """复制上传的临时文件到 job 目录并启动后台管线线程，返回 job_id。"""
         job_id = uuid.uuid4().hex[:12]
         storage.create_job(job_id, filename)
         shutil.copy(video_src_path, storage.video_path(job_id))
         threading.Thread(
             target=self._run,
-            args=(job_id, target_player, skip_llm, hit_ts, stroke_type),
+            args=(job_id, target_player, skip_llm, start_ts, stroke_type),
             daemon=True, name=f"job-{job_id}",
         ).start()
         return job_id
 
-    def _run(self, job_id, target_player, skip_llm=False, hit_ts=None,
+    def _run(self, job_id, target_player, skip_llm=False, start_ts=None,
              stroke_type=None):
         def on_progress(pct, stage, msg):
             r = storage.load_result(job_id)
@@ -49,7 +49,7 @@ class JobManager:
         try:
             result = run_pipeline(
                 job_id, target_player, on_progress, skip_llm=skip_llm,
-                hit_ts=hit_ts, stroke_type=stroke_type,
+                start_ts=start_ts, stroke_type=stroke_type,
             )
         except Exception as e:
             r = storage.load_result(job_id)

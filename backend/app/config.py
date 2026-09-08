@@ -15,11 +15,11 @@ class Settings(BaseModel):
     follow_offset_frames: int = 6    # 随挥帧在峰值后多少帧
     prep_min_gap_frames: int = 3     # 引拍帧至少在峰值前多少帧
     crop_margin_ratio: float = 0.15  # 裁剪边距（相对人物框尺寸）
-    # 手动模式：围绕用户指定击球时间戳取窗口、按固定偏移出三联帧
-    manual_window_before_s: float = 0.9   # 取帧窗口起点（击球前）
-    manual_window_after_s: float = 0.6    # 取帧窗口终点（击球后）
-    manual_prep_offset_frames: int = 8    # 引拍帧在击球帧前多少帧（15fps≈0.53s）
-    manual_follow_offset_frames: int = 6  # 随挥帧在击球帧后多少帧（≈0.4s）
+    # 手动模式：用户只标动作"大致开始"的时间点，后端在向前窗口内用速度峰值
+    # 自动定位击球帧。发球动作链更长（抛球+举拍+挥击），给更长的前向窗口。
+    manual_before_margin_s: float = 0.5   # 标注点之前也留一点余量（标得稍晚也能截到引拍）
+    manual_forward_ground_s: float = 2.0  # 正手/反手：从准备到随挥的前向窗口
+    manual_forward_serve_s: float = 3.5   # 发球：抛球到随挥的前向窗口
     llm_min_delay_s: float = 2.0
     llm_max_delay_s: float = 5.0
     llm_max_retries: int = 2

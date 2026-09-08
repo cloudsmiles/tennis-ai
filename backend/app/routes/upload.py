@@ -19,7 +19,7 @@ async def create_job(
     cx: Optional[float] = Form(None),
     cy: Optional[float] = Form(None),
     skip_llm: bool = Form(False),
-    hit_ts: Optional[float] = Form(None),
+    start_ts: Optional[float] = Form(None),
     stroke_type: Optional[str] = Form(None),
 ):
     if stroke_type is not None and stroke_type not in VALID_STROKES:
@@ -33,7 +33,7 @@ async def create_job(
         target = (cx, cy) if cx is not None and cy is not None else None
         job_id = job_manager.create(
             tmp_path, filename, target, skip_llm=skip_llm,
-            hit_ts=hit_ts, stroke_type=stroke_type,
+            start_ts=start_ts, stroke_type=stroke_type,
         )
     finally:
         try:
