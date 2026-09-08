@@ -15,12 +15,6 @@ function strokeLabel(t: string | null): string {
   return STROKE_LABELS[t] ?? t;
 }
 
-const hintStyle = {
-  fontSize: 13,
-  color: "#b26a00",
-  fontWeight: 400,
-} as const;
-
 function OkBody({ a }: { a: ActionRecord }) {
   const entries = Object.entries(a.scores ?? {});
   return (
@@ -94,7 +88,6 @@ function ActionCard({ jobId, a }: { jobId: string; a: ActionRecord }) {
       />
       <h3 style={{ margin: "12px 0 8px", fontSize: 17 }}>
         动作 {a.action_id + 1}（{a.peak_ts.toFixed(1)}s）· {strokeLabel(a.stroke_type)}
-        {a.suspected_serve ? <span style={hintStyle}>（本地疑似发球）</span> : null}
       </h3>
       {a.status === "ok" ? (
         <OkBody a={a} />

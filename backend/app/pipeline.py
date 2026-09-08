@@ -17,21 +17,21 @@ from .config import settings
 from .cv.detect import Detector
 from .cv.frames import extract_frames, extract_frames_window
 from .cv.geometry import box_center, find_peaks, point_speed, smooth
-from .cv.keyframes import build_swing_events
+from .cv.keyframes import build_swing_events, make_event
 from .cv.montage import make_montage
 from .cv.quality import score_event
 from .cv.select import select_best
 from .llm.tongyi import LLMParseError, NotLoggedInError, llm_queue
-from .schemas import ActionRecord, JobResult, SwingEvent
+from .schemas import ActionRecord, JobResult
 
 LOGIN_REQUIRED_NOTE = "通义千问未登录，请在浏览器中登录后重试"
 
 
 def _montageable(event, dets) -> bool:
-    """montage/裁剪假定三帧都有人物框：prep/peak/follow 任一缺失即不可用。"""
+    """montage/裁剪假定四帧都有人物框：准备/蓄力/击球/随挥任一缺失即不可用。"""
     return all(
         dets[i].player_box is not None
-        for i in (event.prep_idx, event.peak_idx, event.follow_idx)
+        for i in (event.prep_idx, event.load_idx, event.peak_idx, event.follow_idx)
     )
 
 
@@ -252,18 +252,11 @@ def _manual_events(video, start_ts, stroke_type, target_player, prog, fail):
         event = max(events, key=lambda e: e.max_speed)
         return [event], frames, dets, w, h
 
-    # 峰值检测未达阈值（球拍/手腕信号弱）：回退到窗口内速度最大的帧
+    # 峰值检测未达阈值（球拍/手腕信号弱）：回退到窗口内速度最大的帧作为击球帧，
+    # 仍由包络区间切出完整动作的四帧
     with_player = [i for i, d in enumerate(dets) if d.player_box is not None]
     peak_idx = max(with_player, key=lambda i: speed[i] if i < len(speed) else 0.0)
-    event = SwingEvent(
-        peak_idx=peak_idx,
-        peak_ts=dets[peak_idx].ts,
-        prep_idx=max(0, peak_idx - max(settings.prep_min_gap_frames,
-                                       settings.follow_offset_frames)),
-        follow_idx=min(len(dets) - 1, peak_idx + settings.follow_offset_frames),
-        max_speed=float(speed[peak_idx]) if peak_idx < len(speed) else 0.0,
-        suspected_serve=False,
-    )
+    event = make_event(dets, speed, peak_idx)
     if not _montageable(event, dets):
         fail(15, "该片段中球员不够清晰，请把进度条拖到球员完整入镜的动作开始处")
         return None, None, None, None, None

@@ -20,15 +20,15 @@ def analysis_prompt(stroke_type: str | None = None) -> str:
     if stroke_type in STROKE_ZH:
         zh = STROKE_ZH[stroke_type]
         return (
-            f"你是专业网球教练。这张图从左到右是同一个{zh}击球动作的三个阶段："
-            "准备(引拍)、击球瞬间、随挥。动作类型已由用户标注为"
+            f"你是专业网球教练。这张图从左到右是同一个{zh}击球动作完整过程的四个阶段："
+            "准备(引拍开始)、引拍蓄力、击球瞬间、随挥结束。动作类型已由用户标注为"
             f"{zh}，请直接据此评分与纠错；若画面与该类型明显不符，在 advice 里指出。\n"
             f"{_JSON_FORMAT}"
             f'stroke_type 请填 "{stroke_type}"。'
         )
     return (
-        "你是专业网球教练。这张图从左到右是同一个击球动作的三个阶段："
-        "准备(引拍)、击球瞬间、随挥。请判断动作类型并给出技术纠错。\n"
+        "你是专业网球教练。这张图从左到右是同一个击球动作完整过程的四个阶段："
+        "准备(引拍开始)、引拍蓄力、击球瞬间、随挥结束。请判断动作类型并给出技术纠错。\n"
         f"{_JSON_FORMAT}"
         "stroke_type 只能是 forehand(正手)、backhand(反手)、serve(发球) 之一。"
     )

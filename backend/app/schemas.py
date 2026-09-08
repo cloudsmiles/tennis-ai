@@ -19,10 +19,11 @@ class FrameDet:
 
 @dataclass
 class SwingEvent:
-    peak_idx: int
+    peak_idx: int       # 击球帧（速度峰值）
     peak_ts: float
-    prep_idx: int
-    follow_idx: int
+    prep_idx: int       # 准备帧：动作启动（引拍开始）
+    load_idx: int       # 蓄力帧：引拍完成、准备击球（prep 与 peak 之间）
+    follow_idx: int     # 随挥帧：随挥结束
     max_speed: float
     quality: float = 0.0
     suspected_serve: bool = False

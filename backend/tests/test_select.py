@@ -2,8 +2,9 @@ from app.schemas import SwingEvent
 from app.cv.select import select_best
 
 def _ev(i, ts, q, serve=False):
-    return SwingEvent(peak_idx=i, peak_ts=ts, prep_idx=i-3, follow_idx=i+3,
-                      max_speed=10, quality=q, suspected_serve=serve)
+    return SwingEvent(peak_idx=i, peak_ts=ts, prep_idx=i-3, load_idx=i-1,
+                      follow_idx=i+3, max_speed=10, quality=q,
+                      suspected_serve=serve)
 
 def test_picks_top_quality_across_rallies():
     # 两个回合（间隔>6s）：回合1 两个动作，回合2 一个动作

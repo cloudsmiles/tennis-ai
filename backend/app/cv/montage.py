@@ -3,8 +3,8 @@ import numpy as np
 from ..config import settings
 from .keyframes import crop_box_for
 
-# OpenCV putText 不支持中文字体，用英文标签（语义：准备/击球/随挥）
-LABELS = ["Ready", "Impact", "Follow"]
+# OpenCV putText 不支持中文字体，用英文标签（语义：准备/引拍蓄力/击球/随挥）
+LABELS = ["Ready", "Load", "Impact", "Follow"]
 H = 360  # 统一高度
 
 def _crop_resize(frame, det, w, h):
@@ -16,7 +16,7 @@ def _crop_resize(frame, det, w, h):
     return cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), H))
 
 def make_montage(frames, dets, event, out_path, frame_w, frame_h):
-    idxs = [event.prep_idx, event.peak_idx, event.follow_idx]
+    idxs = [event.prep_idx, event.load_idx, event.peak_idx, event.follow_idx]
     tiles = []
     for label, idx in zip(LABELS, idxs):
         tile = _crop_resize(frames[idx], dets[idx], frame_w, frame_h)

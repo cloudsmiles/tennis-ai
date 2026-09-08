@@ -2,7 +2,8 @@ from app.schemas import FrameDet, SwingEvent
 from app.cv.quality import score_event
 
 def _ev():
-    return SwingEvent(peak_idx=5, peak_ts=0.3, prep_idx=2, follow_idx=8, max_speed=20.0)
+    return SwingEvent(peak_idx=5, peak_ts=0.3, prep_idx=2, load_idx=3,
+                      follow_idx=8, max_speed=20.0)
 
 def test_good_clear_player_scores_higher_than_small_edge():
     good = FrameDet(5, 0.3, player_box=(60, 60, 200, 420), player_conf=0.95,
