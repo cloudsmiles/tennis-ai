@@ -3,14 +3,21 @@
 This is the integration layer that drives the persistent browser session
 (``llm.browser``) to talk to tongyi.  All UI locators come from
 ``llm.selectors`` so a site redesign only requires updating that file.
+
+Playwright's sync API is thread-bound, so the entire page conversation runs
+inside ONE ``browser.run_on_page`` call — i.e. on the browser-owner thread —
+no matter which thread called ``analyze_image`` (JobManager worker, FastAPI
+request thread, test runner, ...).
 """
 import random
 import threading
 import time
 from pathlib import Path
 
+from playwright.sync_api import Error as PlaywrightError
+
 from ..config import settings
-from .browser import browser
+from .browser import browser, is_zombie_error
 from .parse import parse_analysis
 from .prompts import ANALYSIS_PROMPT
 from .selectors import SELECTORS, TONGYI_URL
@@ -37,25 +44,50 @@ def _wait_reply(page, timeout_s: float = 180) -> str:
     return blocks[-1].inner_text() if blocks else ""
 
 
+def _require_login(page) -> None:
+    """(owner thread) Raise NotLoggedInError unless the chat input is present.
+
+    Same 3s probe ``browser.is_logged_in`` uses.  A closed-window error is
+    re-raised untouched so ``run_on_page``'s zombie recovery can relaunch.
+    """
+    try:
+        page.wait_for_selector(SELECTORS["chat_input"], timeout=3000)
+    except PlaywrightError as exc:
+        if is_zombie_error(exc):
+            raise  # window closed: let run_on_page relaunch and retry
+        raise NotLoggedInError(
+            "tongyi not logged in; call open_for_login() first"
+        ) from exc
+
+
 def analyze_image(image_path: Path) -> dict:
     """One full tongyi conversation: new chat -> upload -> prompt -> parse.
+
+    The whole goto→upload→fill→click→wait→grab-reply sequence runs in ONE
+    ``browser.run_on_page`` call (on the browser-owner thread); the result
+    — or exception, e.g. ``NotLoggedInError`` — is propagated back to the
+    calling thread.
 
     Raises ``NotLoggedInError`` when the browser session is not logged in;
     raises ValueError (from ``parse_analysis``) when the reply is unparseable.
     """
     browser.ensure_started()
-    if not browser.is_logged_in():
-        raise NotLoggedInError("tongyi not logged in; call open_for_login() first")
 
-    page = browser.page
-    page.goto(TONGYI_URL)  # fresh conversation
-    page.wait_for_selector(SELECTORS["chat_input"], timeout=30000)
-    page.set_input_files(SELECTORS["upload_button"], str(image_path))
-    page.wait_for_timeout(2000)  # let the upload settle
-    page.fill(SELECTORS["chat_input"], ANALYSIS_PROMPT)
-    page.click(SELECTORS["send_button"])
-    text = _wait_reply(page)
-    return parse_analysis(text)
+    def _conversation(page):
+        # NOTE: this runs on the browser-owner thread — drive the raw `page`
+        # here; calling the browser.* public API would (harmlessly but
+        # pointlessly) marshal straight back onto this same thread.
+        _require_login(page)
+        page.goto(TONGYI_URL)  # fresh conversation
+        page.wait_for_selector(SELECTORS["chat_input"], timeout=30000)
+        page.set_input_files(SELECTORS["upload_button"], str(image_path))
+        page.wait_for_timeout(2000)  # let the upload settle
+        page.fill(SELECTORS["chat_input"], ANALYSIS_PROMPT)
+        page.click(SELECTORS["send_button"])
+        text = _wait_reply(page)
+        return parse_analysis(text)
+
+    return browser.run_on_page(_conversation)
 
 
 class LLMSerialQueue:
