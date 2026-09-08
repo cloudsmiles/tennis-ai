@@ -67,6 +67,60 @@ def build_swing_events(dets, peaks, speed, baseline=None):
     return [make_event(dets, speed, p, baseline) for p in peaks]
 
 
+def _nearest_with_player(dets, idx):
+    """距 idx 最近、且有人物框的帧索引（向两侧扩展查找）。"""
+    n = len(dets)
+    idx = max(0, min(n - 1, idx))
+    if dets[idx].player_box is not None:
+        return idx
+    for d in range(1, n):
+        for j in (idx - d, idx + d):
+            if 0 <= j < n and dets[j].player_box is not None:
+                return j
+    return idx
+
+
+def manual_event(dets, speed, peak_idx, stroke_type):
+    """手动模式：以击球帧 peak_idx 为锚，按固定时长取四帧。
+
+    引拍/随挥位置由"相对击球帧的时间偏移"决定（不依赖包络阈值，避免击球帧因
+    运动模糊导致速度信号失真时把动作截短）。ready=击球前 offset、follow=击球后
+    offset，load 取二者中点。
+    """
+    n = len(dets)
+    peak_idx = max(0, min(n - 1, peak_idx))
+    if stroke_type == "serve":
+        ready_before = settings.manual_ready_before_serve_s
+        follow_after = settings.manual_follow_after_serve_s
+    else:
+        ready_before = settings.manual_ready_before_ground_s
+        follow_after = settings.manual_follow_after_ground_s
+    peak_ts = dets[peak_idx].ts
+
+    def idx_at(ts):
+        j = min(range(n), key=lambda i: abs(dets[i].ts - ts))
+        return _nearest_with_player(dets, j)
+
+    ready_idx = idx_at(peak_ts - ready_before)
+    follow_idx = idx_at(peak_ts + follow_after)
+    load_idx = _nearest_with_player(dets, (ready_idx + peak_idx) // 2)
+
+    # 保证严格顺序：ready < load < peak < follow
+    ready_idx = min(ready_idx, peak_idx - 2)
+    load_idx = min(max(load_idx, ready_idx + 1), peak_idx - 1)
+    follow_idx = max(follow_idx, min(n - 1, peak_idx + 2))
+
+    return SwingEvent(
+        peak_idx=peak_idx,
+        peak_ts=peak_ts,
+        prep_idx=ready_idx,
+        load_idx=load_idx,
+        follow_idx=follow_idx,
+        max_speed=float(speed[peak_idx]) if peak_idx < len(speed) else 0.0,
+        suspected_serve=is_overhead(dets, peak_idx),
+    )
+
+
 def crop_box_for(det, frame_w, frame_h, margin_ratio):
     x1, y1, x2, y2 = det.player_box
     w, h = x2 - x1, y2 - y1

@@ -45,11 +45,13 @@ function tabStyle(active: boolean): CSSProperties {
 const dropZone: CSSProperties = {
   border: `2px dashed ${colors.border}`,
   borderRadius: 12,
-  padding: "34px 20px",
+  padding: "36px 20px",
   textAlign: "center",
   color: colors.muted,
   marginBottom: 16,
   background: "#fafbfc",
+  cursor: "pointer",
+  display: "block",
 };
 
 export default function SourcePicker({ onFile, onSource }: SourcePickerProps) {
@@ -97,10 +99,32 @@ export default function SourcePicker({ onFile, onSource }: SourcePickerProps) {
             <input
               type="file"
               accept="video/*"
-              style={{ display: "block", margin: "0 auto 10px" }}
+              style={{ display: "none" }}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-            {file ? `已选择：${file.name}` : "点击选择视频文件（MP4 / MOV 等）"}
+            <div style={{ fontSize: 30, lineHeight: 1 }}>⬆</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: colors.text, marginTop: 10 }}>
+              点击选择视频文件
+            </div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>
+              支持 MP4 / MOV 等常见格式
+            </div>
+            {file ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  display: "inline-block",
+                  padding: "4px 12px",
+                  borderRadius: 999,
+                  background: "#eff6ff",
+                  color: colors.primary,
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                已选择：{file.name}
+              </div>
+            ) : null}
           </label>
           <button
             type="button"

@@ -17,7 +17,7 @@ from .config import settings
 from .cv.detect import Detector
 from .cv.frames import extract_frames, extract_frames_window
 from .cv.geometry import box_center, find_peaks, point_speed, smooth
-from .cv.keyframes import build_swing_events, make_event
+from .cv.keyframes import build_swing_events, manual_event
 from .cv.montage import make_montage
 from .cv.quality import score_event
 from .cv.select import select_best
@@ -247,24 +247,30 @@ def _manual_events(video, start_ts, stroke_type, target_player, click_ts,
         fail(15, "该时间点附近未检测到球员，请把进度条拖到球员清晰入镜的动作开始处")
         return None, None, None, None, None
 
-    # 窗口内速度峰值 → 击球帧（与自动模式同一套信号/阈值）
+    # 速度信号 → 击球帧。引拍（球拍向后）也会产生一个较早的峰，而真正向前挥拍
+    # /击球的峰更晚；击球瞬间动作最快、又易因运动模糊丢拍，故在标注点之后的搜索
+    # 窗口内取"最晚出现的强峰"作为击球帧（强度不明显偏弱时），而非全局最高峰。
     points = [box_center(d.racket_box) if d.racket_box else d.wrist for d in dets]
     speed = smooth(point_speed(points), settings.speed_smooth_window)
     peaks = find_peaks(
         speed, settings.peak_prominence_ratio, settings.speed_smooth_window
     )
-    events = [e for e in build_swing_events(dets, peaks, speed)
-              if _montageable(e, dets)]
-    if events:
-        # 窗口里只有目标动作：速度最高的峰即击球瞬间
-        event = max(events, key=lambda e: e.max_speed)
-        return [event], frames, dets, w, h
+    search = (settings.manual_peak_search_serve_s if stroke_type == "serve"
+              else settings.manual_peak_search_ground_s)
+    cands = [p for p in peaks
+             if dets[p].player_box is not None
+             and start_ts - 0.15 <= dets[p].ts <= start_ts + search]
+    if cands:
+        strong = max(cands, key=lambda p: speed[p])
+        late = max(cands)  # 最晚出现的峰 = 向前挥拍/击球
+        contact = late if speed[late] >= 0.6 * speed[strong] else strong
+    else:
+        # 峰值检测未达阈值（球拍/手腕信号弱）：回退到窗口内速度最大的有人物帧
+        with_player = [i for i, d in enumerate(dets) if d.player_box is not None]
+        contact = max(with_player,
+                      key=lambda i: speed[i] if i < len(speed) else 0.0)
 
-    # 峰值检测未达阈值（球拍/手腕信号弱）：回退到窗口内速度最大的帧作为击球帧，
-    # 仍由包络区间切出完整动作的四帧
-    with_player = [i for i, d in enumerate(dets) if d.player_box is not None]
-    peak_idx = max(with_player, key=lambda i: speed[i] if i < len(speed) else 0.0)
-    event = make_event(dets, speed, peak_idx)
+    event = manual_event(dets, speed, contact, stroke_type)
     if not _montageable(event, dets):
         fail(15, "该片段中球员不够清晰，请把进度条拖到球员完整入镜的动作开始处")
         return None, None, None, None, None
