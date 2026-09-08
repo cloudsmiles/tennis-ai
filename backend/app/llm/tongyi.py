@@ -27,6 +27,19 @@ class NotLoggedInError(RuntimeError):
     """The tongyi session has no logged-in user; manual login is required."""
 
 
+class LLMParseError(RuntimeError):
+    """The tongyi reply could not be parsed as JSON.
+
+    ``raw`` keeps the original reply text so the pipeline can store it as the
+    action's ``raw_reply`` and the UI can still show the coach's prose
+    (spec §4: 解析失败时把原始文本一并保存，前端仍可展示原文).
+    """
+
+    def __init__(self, raw: str):
+        super().__init__("tongyi reply is not parseable as json")
+        self.raw = raw
+
+
 def _wait_reply(page, timeout_s: float = 180) -> str:
     """Wait for the answer to finish generating, then return its text.
 
@@ -69,7 +82,8 @@ def analyze_image(image_path: Path) -> dict:
     calling thread.
 
     Raises ``NotLoggedInError`` when the browser session is not logged in;
-    raises ValueError (from ``parse_analysis``) when the reply is unparseable.
+    raises ``LLMParseError`` (carrying the raw reply in ``.raw``) when the
+    reply is unparseable.
     """
     browser.ensure_started()
 
@@ -85,7 +99,13 @@ def analyze_image(image_path: Path) -> dict:
         page.fill(SELECTORS["chat_input"], ANALYSIS_PROMPT)
         page.click(SELECTORS["send_button"])
         text = _wait_reply(page)
-        return parse_analysis(text)
+        try:
+            return parse_analysis(text)
+        except ValueError:
+            # Never lose the coach's prose: wrap as LLMParseError so the raw
+            # reply travels with the exception back through
+            # run_on_page/submit to the pipeline (stored as raw_reply).
+            raise LLMParseError(text)
 
     return browser.run_on_page(_conversation)
 
@@ -113,6 +133,18 @@ class LLMSerialQueue:
                     return result
                 except NotLoggedInError:
                     raise  # retrying cannot fix a missing login
+                except LLMParseError as exc:
+                    # Keep the queue's existing retry pacing for parse
+                    # failures (a fresh conversation may return valid JSON),
+                    # but once the attempts are exhausted the LLMParseError
+                    # itself — raw reply attached — must reach the caller
+                    # unwrapped; the generic RuntimeError below would
+                    # suppress its type (and lose .raw).
+                    last_error = exc
+                    if attempt < settings.llm_max_retries:
+                        time.sleep(2.0)
+                    else:
+                        raise
                 except Exception as exc:
                     last_error = exc
                     if attempt < settings.llm_max_retries:

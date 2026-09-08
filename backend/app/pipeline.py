@@ -15,7 +15,7 @@ from .cv.keyframes import build_swing_events
 from .cv.montage import make_montage
 from .cv.quality import score_event
 from .cv.select import select_best
-from .llm.tongyi import NotLoggedInError, llm_queue
+from .llm.tongyi import LLMParseError, NotLoggedInError, llm_queue
 from .schemas import ActionRecord, JobResult
 
 LOGIN_REQUIRED_NOTE = "通义千问未登录，请在浏览器中登录后重试"
@@ -122,6 +122,11 @@ def run_pipeline(job_id, target_player=None, on_progress=None) -> JobResult:
             rec.overall = data["overall"]
             rec.issues = data["issues"]
             rec.advice = data["advice"]
+        except LLMParseError as ex:
+            # 回复无法解析为 JSON（spec §4）：保留模型原文，仅本动作标记
+            # parse_failed，其余动作照常分析（不终结任务、不触发登录）
+            rec.status = "parse_failed"
+            rec.raw_reply = ex.raw
         except NotLoggedInError:
             # 登录缺失重试无意义：本动作标记失败并终止整个分析阶段
             rec.status = "failed"

@@ -56,9 +56,15 @@ function OkBody({ a }: { a: ActionRecord }) {
 }
 
 function FailedBody({ a }: { a: ActionRecord }) {
+  // parse_failed：模型回复无法解析为结构化结果，但仍展示原文（spec §4）
+  const parseFailed = a.status === "parse_failed";
   return (
     <div>
-      <p style={{ margin: "0 0 6px", color: "#c0392b" }}>该动作分析失败。</p>
+      <p style={{ margin: "0 0 6px", color: "#c0392b" }}>
+        {parseFailed
+          ? "该动作的模型回复无法解析为结构化结果，以下为原文："
+          : "该动作分析失败。"}
+      </p>
       {a.raw_reply ? (
         <pre
           style={{

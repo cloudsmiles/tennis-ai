@@ -2,7 +2,8 @@
 
 export type JobStatus = "queued" | "running" | "done" | "error";
 
-export type ActionStatus = "ok" | "pending" | "failed";
+/** parse_failed：回复无法解析为 JSON，raw_reply 保留模型原文供展示 */
+export type ActionStatus = "ok" | "pending" | "parse_failed" | "failed";
 
 /** 单次挥拍动作的记录（含大模型分析结果）。 */
 export interface ActionRecord {
