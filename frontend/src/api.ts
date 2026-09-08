@@ -4,24 +4,27 @@ import type { JobResult, ProgressEvent } from "./types";
 export const BASE = "http://localhost:8000";
 
 /** POST /api/jobs：上传视频建分析任务，返回 job_id。
- *  cx/cy 为球员点选的视频像素坐标；startTs+strokeType 为手动模式（用户把进度
- *  条拖到动作大致开始处并标注动作类型，后端自动定位击球帧）；skipLlm=true 只
- *  出拼贴图、不调用大模型。 */
+ *  cx/cy 为球员点选的视频像素坐标，clickTs 为点选时的时间戳（后端在该帧锁定
+ *  并全程跟踪该球员）；startTs+strokeType 为手动模式（用户把进度条拖到动作
+ *  大致开始处并标注动作类型，后端自动定位击球帧）；skipLlm=true 只出拼贴图、
+ *  不调用大模型。 */
 export async function createJob(
   file: File,
   opts: {
     cx?: number;
     cy?: number;
+    clickTs?: number;
     skipLlm?: boolean;
     startTs?: number;
     strokeType?: string;
   } = {},
 ): Promise<string> {
-  const { cx, cy, skipLlm = false, startTs, strokeType } = opts;
+  const { cx, cy, clickTs, skipLlm = false, startTs, strokeType } = opts;
   const form = new FormData();
   form.append("video", file);
   if (cx !== undefined) form.append("cx", String(cx));
   if (cy !== undefined) form.append("cy", String(cy));
+  if (clickTs !== undefined) form.append("click_ts", String(clickTs));
   if (startTs !== undefined) form.append("start_ts", String(startTs));
   if (strokeType !== undefined) form.append("stroke_type", strokeType);
   form.append("skip_llm", skipLlm ? "true" : "false");

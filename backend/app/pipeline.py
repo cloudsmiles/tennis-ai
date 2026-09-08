@@ -36,12 +36,13 @@ def _montageable(event, dets) -> bool:
 
 
 def run_pipeline(job_id, target_player=None, on_progress=None, skip_llm=False,
-                 start_ts=None, stroke_type=None) -> JobResult:
+                 start_ts=None, stroke_type=None, click_ts=None) -> JobResult:
     """跑完分析管线并落盘；失败时返回 status="error" 的结果（不抛异常）。
 
     start_ts 给定即手动模式：该时间点为用户标注的动作"大致开始"，后端在其
-    后的窗口内自动定位击球帧。on_progress(pct, stage, msg) 在每个阶段回调
-    一次；终端事件（done / error / login_required）由调用方（JobManager）
+    后的窗口内自动定位击球帧。click_ts 为用户点选球员时所在的时间戳，用于在
+    该帧锁定球员 track id 并全程跟随。on_progress(pct, stage, msg) 在每个阶段
+    回调一次；终端事件（done / error / login_required）由调用方（JobManager）
     在返回后统一补发。
     """
     video = storage.video_path(job_id)
@@ -64,7 +65,7 @@ def run_pipeline(job_id, target_player=None, on_progress=None, skip_llm=False,
     # 1-4. 取帧 + 检测 + 选出要出图的动作 ------------------------------
     if start_ts is not None:
         events, frames, dets, w, h = _manual_events(
-            video, start_ts, stroke_type, target_player, prog, fail
+            video, start_ts, stroke_type, target_player, click_ts, prog, fail
         )
     else:
         events, frames, dets, w, h = _auto_events(
@@ -201,13 +202,13 @@ def _auto_events(video, target_player, prog, fail):
     return events, frames, dets, w, h
 
 
-def _manual_events(video, start_ts, stroke_type, target_player, prog, fail):
-    """手动模式：抽 start_ts 之后的窗口帧 → 检测 → 自动定位击球帧 → 单个动作事件。
+def _manual_events(video, start_ts, stroke_type, target_player, click_ts,
+                   prog, fail):
+    """手动模式：抽窗口帧 → 检测（在点击帧锁定并全程跟随球员）→ 自动定位击球帧。
 
-    用户只需把进度条拖到动作"大致开始"处（发球即抛球前后），无需对准击球瞬间。
-    后端在窗口内复用自动模式的速度峰值搜索找到真正的击球帧（窗口里只有这一个
-    动作，取速度最高的峰即可），引拍/随挥由 build_swing_events 按局部低速点与
-    固定偏移确定。发球动作链更长，前向窗口取更大值。
+    用户只需把进度条拖到动作"大致开始"处（发球即抛球前后），无需对准击球瞬间；
+    点选球员可在任意一帧完成，后端在该帧锁定球员 track id 并自动跟随。窗口内复用
+    自动模式的速度峰值搜索找到真正的击球帧。发球动作链更长，前向窗口取更大值。
     返回值约定同 _auto_events。
     """
     forward = (
@@ -215,13 +216,18 @@ def _manual_events(video, start_ts, stroke_type, target_player, prog, fail):
         if stroke_type == "serve"
         else settings.manual_forward_ground_s
     )
+    # 窗口覆盖 [起点-余量, 起点+前向]；若点选球员发生在更晚/更早的帧，一并纳入，
+    # 以便在点击帧锁定球员（track id 贯穿整段）
+    t0 = start_ts - settings.manual_before_margin_s
+    t1 = start_ts + forward
+    if click_ts is not None:
+        t0 = min(t0, click_ts - 0.3)
+        t1 = max(t1, click_ts + 0.3)
+    center = (t0 + t1) / 2.0
     prog(5, "extracting", "截取动作片段")
     try:
-        # extract_frames_window 的窗口为 [center-before, center+after]；
-        # 这里 center=用户标注的起点，before 留余量、after 覆盖整个动作
         frames, ts, w, h = extract_frames_window(
-            video, settings.extract_fps, start_ts,
-            settings.manual_before_margin_s, forward,
+            video, settings.extract_fps, center, center - t0, t1 - center,
         )
     except ValueError:
         fail(5, "无法读取视频文件")
@@ -230,7 +236,9 @@ def _manual_events(video, start_ts, stroke_type, target_player, prog, fail):
     prog(15, "detecting", "检测球员并定位击球瞬间")
     try:
         detector = Detector()
-        dets = detector.detect_frames(frames, ts, target_player)
+        dets = detector.detect_frames(
+            frames, ts, target_player, target_ts=click_ts
+        )
     except Exception as ex:
         fail(15, f"检测模型运行失败：{ex}")
         return None, None, None, None, None

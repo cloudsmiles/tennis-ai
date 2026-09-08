@@ -62,7 +62,7 @@ def _run_pipeline(job_id, submit, monkeypatch, tmp_path):
         pipeline,
         "Detector",
         lambda: types.SimpleNamespace(
-            detect_frames=lambda frames, ts, tp: _fake_dets()
+            detect_frames=lambda frames, ts, tp, target_ts=None: _fake_dets()
         ),
     )
     monkeypatch.setattr(pipeline, "make_montage", lambda *a, **k: None)

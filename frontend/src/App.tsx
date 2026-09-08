@@ -127,17 +127,19 @@ export default function App() {
   };
 
   // 第 2 步确认后开始分析。startTs 为用户标注的动作"大致开始"（视频秒，后端
-  // 自动定位击球帧），strokeType 为动作类型，cx/cy 为球员点选坐标（可空）。
+  // 自动定位击球帧），clickTs 为点选球员时的时间戳（后端在该帧锁定并跟踪），
+  // strokeType 为动作类型，cx/cy 为球员点选坐标（可空）。
   // preview=true：只跑到生成动作帧拼贴图，不检查登录、不调用通义千问。
   const startAnalysis = async (opts: {
     cx?: number;
     cy?: number;
+    clickTs?: number;
     startTs?: number;
     strokeType?: string;
     preview?: boolean;
   }) => {
     if (!file) return;
-    const { cx, cy, startTs, strokeType, preview = false } = opts;
+    const { cx, cy, clickTs, startTs, strokeType, preview = false } = opts;
     setNotice(null);
     setError(null);
     try {
@@ -155,6 +157,7 @@ export default function App() {
       const jid = await createJob(file, {
         cx,
         cy,
+        clickTs,
         startTs,
         strokeType,
         skipLlm: preview,

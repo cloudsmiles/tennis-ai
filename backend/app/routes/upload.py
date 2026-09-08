@@ -21,6 +21,7 @@ async def create_job(
     skip_llm: bool = Form(False),
     start_ts: Optional[float] = Form(None),
     stroke_type: Optional[str] = Form(None),
+    click_ts: Optional[float] = Form(None),
 ):
     if stroke_type is not None and stroke_type not in VALID_STROKES:
         raise HTTPException(status_code=422, detail="stroke_type 取值非法")
@@ -33,7 +34,7 @@ async def create_job(
         target = (cx, cy) if cx is not None and cy is not None else None
         job_id = job_manager.create(
             tmp_path, filename, target, skip_llm=skip_llm,
-            start_ts=start_ts, stroke_type=stroke_type,
+            start_ts=start_ts, stroke_type=stroke_type, click_ts=click_ts,
         )
     finally:
         try:

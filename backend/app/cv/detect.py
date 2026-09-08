@@ -1,5 +1,9 @@
 # YOLO 检测/跟踪集成层：person 跟踪 + racket 检测 + 持拍手腕关键点
 # ultralytics/torch 只允许在本模块 import（见实现计划 Task 9）。
+#
+# 两段式：先对整段帧做 track（persist 分配 track id），再在"用户点击时刻"那帧
+# 按坐标锁定目标球员的 track id，最后用该 id 贯穿整段选框——这样无论用户在哪一
+# 帧点选，跟踪都会自动跟随这名球员穿过整个动作（点击帧与取帧窗口起点不同也无妨）。
 import sys
 
 from ..schemas import FrameDet
@@ -87,135 +91,145 @@ class Detector:
         self.pose = YOLO("yolo11n-pose.pt")   # person box + 17 keypoints
         self.det = YOLO("yolo11n.pt")         # COCO class 38: tennis racket
         self.device = device or self._pick_device()
-        self._track_id = None                 # 已锁定球员的 track id
 
     def _pick_device(self):
         import torch
         return "mps" if torch.backends.mps.is_available() else "cpu"
 
     # ------------------------------------------------------------------
-    def detect_frames(self, frames, timestamps, target_player=None):
-        """frames: BGR ndarray 列表; timestamps: 每帧时间戳;
-        target_player=(cx,cy): 首帧选距该点最近的 person（前端点选），None 取最大者。"""
-        self._track_id = None  # 每次调用视为一段新片段，重新锁定
+    def detect_frames(self, frames, timestamps, target_player=None,
+                      target_ts=None):
+        """frames: BGR ndarray 列表; timestamps: 每帧时间戳（秒）。
+
+        target_player=(cx,cy)：用户点选的视频像素坐标；配合 target_ts（点击发生
+        的时间戳）在最近的那帧锁定距该点最近的 person 的 track id，随后整段跟随
+        此人。target_ts 为 None 时（自动模式/旧调用）在首帧锁定。target_player
+        为 None 时取面积最大者。
+        """
+        # 第一段：整段跟踪，收集每帧的 person / racket 原始信息
+        info = []  # [(pose_res, persons, rackets), ...]
+        for frame in frames:
+            pr = self.pose.track(frame, persist=True, classes=[0],
+                                 device=self.device, verbose=False)[0]
+            dr = self.det(frame, classes=[38], device=self.device,
+                          verbose=False)[0]
+            info.append((pr, self._parse_persons(pr), self._parse_rackets(dr)))
+
+        lock_id = self._choose_lock_id(info, list(timestamps),
+                                       target_player, target_ts)
+
+        # 第二段：每帧用锁定的 track id 选人（id 丢失时回退面积最大者）
         out = []
-        for i, frame in enumerate(frames):
-            r = self.pose.track(frame, persist=True, classes=[0],
-                                device=self.device, verbose=False)[0]
-            rd = self.det(frame, classes=[38], device=self.device, verbose=False)[0]
-            det = self._pick_player(r, target_player)
-            racket = self._nearest_racket(rd, det)
-            wrist = self._wrist(r, det, racket)
+        for i, (pr, persons, rackets) in enumerate(info):
+            person = self._person_with_id(persons, lock_id)
+            box = person["box"] if person else None
+            racket = self._pick_racket(rackets, box)
+            wrist = self._pick_wrist(person, racket)
             out.append(FrameDet(
                 frame_idx=i, ts=float(timestamps[i]),
-                player_box=det["box"], player_conf=det["conf"],
+                player_box=box,
+                player_conf=person["conf"] if person else 0.0,
                 racket_box=racket["box"], racket_conf=racket["conf"],
-                wrist=wrist, pose_ok=det["pose_ok"]))
+                wrist=wrist,
+                pose_ok=person["pose_ok"] if person else False))
         return out
 
     # ------------------------------------------------------------------
-    def _pick_player(self, res, target_player=None):
-        """选目标球员。返回 {"box","conf","pose_ok","id"}（box 可为 None）。
-
-        - 未锁定 id 时（首帧）：有 target_player 取距其最近的 person，否则取面积
-          最大的；记录所选 person 的 track id。
-        - 已锁定 id：取同 id 的 box；该帧缺失时回退为该帧面积最大的 person
-          （锁定 id 保持不变）。
-        """
+    def _parse_persons(self, res):
+        """从 pose.track 结果解析所有人：box/conf/id/area/pose_ok/kp。"""
         boxes = res.boxes
         n = int(boxes.xyxy.shape[0]) if boxes is not None else 0
-        if n == 0:
-            return {"box": None, "conf": 0.0, "pose_ok": False, "id": None}
-
-        ids = boxes.id  # track() 下为 (n,) tensor；无 id 时为 None
         persons = []
         for j in range(n):
             box = tuple(float(v) for v in boxes.xyxy[j])
+            kp = self._person_keypoints(res, j)
             persons.append({
                 "box": box,
                 "conf": float(boxes.conf[j]),
-                "id": int(ids[j]) if ids is not None else None,
+                "id": int(boxes.id[j]) if boxes.id is not None else None,
                 "area": _box_area(box),
+                "pose_ok": self._pose_ok_from_kp(kp),
+                "kp": kp,
             })
+        return persons
 
-        chosen = None
-        if self._track_id is not None:
-            chosen = next((j for j, p in enumerate(persons)
-                           if p["id"] == self._track_id), None)
-        if chosen is None:  # 首帧，或锁定 id 在本帧丢失
-            first_pick = self._track_id is None
-            if target_player is not None and first_pick:
-                chosen = min(range(n),
-                             key=lambda j: _dist2(_box_center(persons[j]["box"]),
-                                                  target_player))
-            else:
-                chosen = max(range(n), key=lambda j: persons[j]["area"])
-            if first_pick and persons[chosen]["id"] is not None:
-                self._track_id = persons[chosen]["id"]  # 仅首帧锁定；丢失回退不改锁
-
-        p = persons[chosen]
-        return {"box": p["box"], "conf": p["conf"],
-                "pose_ok": self._pose_ok(res, chosen), "id": p["id"]}
-
-    def _pose_ok(self, res, idx):
-        """第 idx 个人的 17 关键点中置信度 > 0.3 的数量 >= 12。"""
-        kpts = self._person_keypoints(res, idx)
-        if kpts is None:
-            return False
-        visible = sum(1 for j in range(min(17, int(kpts.shape[0])))
-                      if float(kpts[j][2]) > KP_CONF)
-        return visible >= POSE_OK_MIN
-
-    def _person_keypoints(self, res, idx):
-        """第 idx 个人的关键点 (17,3)（x,y,conf）；无关键点时返回 None。"""
-        kp = getattr(res, "keypoints", None)
-        data = getattr(kp, "data", None) if kp is not None else None
-        if data is None or int(data.shape[0]) <= idx:
-            return None
-        return data[idx]
-
-    # ------------------------------------------------------------------
-    def _nearest_racket(self, res, det):
-        """在 class 38 框中取中心距目标球员框中心最近者。返回 {"box","conf"}。"""
+    def _parse_rackets(self, res):
+        """从 det 结果解析所有网球拍框：box/conf。"""
         boxes = res.boxes
         n = int(boxes.xyxy.shape[0]) if boxes is not None else 0
-        if n == 0:
-            return {"box": None, "conf": 0.0}
-        cand = [{"box": tuple(float(v) for v in boxes.xyxy[j]),
+        return [{"box": tuple(float(v) for v in boxes.xyxy[j]),
                  "conf": float(boxes.conf[j])} for j in range(n)]
-        pbox = det.get("box")
-        if pbox is None:
-            best = max(cand, key=lambda c: c["conf"])  # 无球员可参照：取置信度最高
+
+    def _choose_lock_id(self, info, timestamps, target_player, target_ts):
+        """确定要跟随的 track id：在目标帧（target_ts 最近帧，否则首帧）选人。
+
+        有 target_player 取距该点最近者，否则取面积最大者；返回其 track id
+        （可能为 None——该帧未分配 id 时，随后每帧回退面积最大者）。
+        """
+        if not info:
+            return None
+        if target_ts is not None:
+            lock_frame = min(range(len(timestamps)),
+                             key=lambda i: abs(timestamps[i] - target_ts))
         else:
-            pc = _box_center(pbox)
-            best = min(cand, key=lambda c: _dist2(_box_center(c["box"]), pc))
-        return best
+            lock_frame = 0
+
+        # 目标帧没人时，向邻近帧找第一个有人的帧
+        f = lock_frame
+        while f < len(info) and not info[f][1]:
+            f += 1
+        if f >= len(info) or not info[f][1]:
+            f = lock_frame
+            while f >= 0 and not info[f][1]:
+                f -= 1
+        if f < 0 or not info[f][1]:
+            return None
+
+        persons = info[f][1]
+        if target_player is not None:
+            chosen = min(persons,
+                         key=lambda p: _dist2(_box_center(p["box"]),
+                                              target_player))
+        else:
+            chosen = max(persons, key=lambda p: p["area"])
+        return chosen["id"]
+
+    def _person_with_id(self, persons, lock_id):
+        """取 track id 匹配的人；缺失或无锁时回退面积最大者。"""
+        if not persons:
+            return None
+        if lock_id is not None:
+            for p in persons:
+                if p["id"] == lock_id:
+                    return p
+        return max(persons, key=lambda p: p["area"])
 
     # ------------------------------------------------------------------
-    def _wrist(self, res, det, racket):
-        """持拍侧手腕：(x,y) 或 None。仅统计置信度 > 0.3 的关键点。
+    def _pick_racket(self, rackets, pbox):
+        """距目标球员框中心最近的球拍；无球员参照时取置信度最高者。"""
+        if not rackets:
+            return {"box": None, "conf": 0.0}
+        if pbox is None:
+            return max(rackets, key=lambda r: r["conf"])
+        pc = _box_center(pbox)
+        return min(rackets, key=lambda r: _dist2(_box_center(r["box"]), pc))
+
+    # ------------------------------------------------------------------
+    def _pick_wrist(self, person, racket):
+        """持拍侧手腕 (x,y) 或 None。
 
         - 有球拍：取距球拍中心最近的那只手腕；
         - 无球拍：取 y 更大（位置更低）的那只。
+        仅统计置信度 > 0.3 的关键点。
         """
-        if det.get("box") is None:
+        if person is None:
             return None
-        # det["box"] 由 _pick_player 从 res.boxes 转换而来，按中心距离回找该人索引
-        boxes = res.boxes
-        n = int(boxes.xyxy.shape[0]) if boxes is not None else 0
-        pc = _box_center(det["box"])
-        idx, best_d = None, None
-        for j in range(n):
-            d = _dist2(_box_center(tuple(float(v) for v in boxes.xyxy[j])), pc)
-            if best_d is None or d < best_d:
-                best_d, idx = d, j
-        kpts = self._person_keypoints(res, idx) if idx is not None else None
-        if kpts is None or int(kpts.shape[0]) <= WRIST_RIGHT:
+        kp = person.get("kp")
+        if kp is None or int(kp.shape[0]) <= WRIST_RIGHT:
             return None
-
         wrists = []
         for j in (WRIST_LEFT, WRIST_RIGHT):
-            x, y, c = (float(v) for v in kpts[j][:3])
+            x, y, c = (float(v) for v in kp[j][:3])
             if c > KP_CONF:
                 wrists.append((x, y))
         if not wrists:
@@ -226,3 +240,20 @@ class Detector:
         else:
             x, y = max(wrists, key=lambda p: p[1])
         return (float(x), float(y))
+
+    # ------------------------------------------------------------------
+    def _person_keypoints(self, res, idx):
+        """第 idx 个人的关键点 (17,3)（x,y,conf）；无关键点时返回 None。"""
+        kp = getattr(res, "keypoints", None)
+        data = getattr(kp, "data", None) if kp is not None else None
+        if data is None or int(data.shape[0]) <= idx:
+            return None
+        return data[idx]
+
+    def _pose_ok_from_kp(self, kp):
+        """17 关键点中置信度 > 0.3 的数量 >= 12。"""
+        if kp is None:
+            return False
+        visible = sum(1 for j in range(min(17, int(kp.shape[0])))
+                      if float(kp[j][2]) > KP_CONF)
+        return visible >= POSE_OK_MIN
