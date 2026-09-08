@@ -1,5 +1,6 @@
 .venv/
 jobs/
+sources/
 __pycache__/
 .pw-data/
 *.pt

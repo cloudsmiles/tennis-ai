@@ -19,6 +19,18 @@ def video_path(job_id: str) -> Path:
     vids = list(d.glob("video.*"))
     return vids[0] if vids else d / "video.mp4"
 
+def source_dir(source_id: str) -> Path:
+    d = settings.sources_dir / source_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def source_video_path(source_id: str) -> Path:
+    d = settings.sources_dir / source_id
+    vids = list(d.glob("video.*"))
+    return vids[0] if vids else d / "video.mp4"
+
+
 def montage_path(job_id: str, action_id: int) -> Path:
     return job_dir(job_id) / "montages" / f"action_{action_id}.jpg"
 

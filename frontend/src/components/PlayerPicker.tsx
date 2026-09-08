@@ -1,7 +1,16 @@
-// 第 2 步：选择动作类型 → 拖到动作大致开始处 → （可选）按钮点选球员 → 确认。
+// 第 2 步：自定义播放器——独立进度条/播放控制（脱离视频原生控制条），
+// 动作类型分段选择，按钮点选球员并在画面标记，确认后开始分析。
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
-import { button, h2, muted } from "./styles";
+import {
+  button,
+  buttonGhost,
+  card,
+  colors,
+  h2,
+  muted,
+  stepHint,
+} from "./styles";
 
 export interface AnalyzeOpts {
   cx?: number;
@@ -15,8 +24,8 @@ export interface AnalyzeOpts {
 }
 
 interface PlayerPickerProps {
-  file: File;
-  /** 确认分析 */
+  /** 可播放的视频地址（本地 blob URL 或后端 source 的 mp4 URL） */
+  src: string;
   onConfirm: (opts: AnalyzeOpts) => void;
 }
 
@@ -24,7 +33,6 @@ interface Picked {
   cx: number;
   cy: number;
   ts: number;
-  /** 相对视频显示框的百分比位置，用于在画面上叠标记 */
   leftPct: number;
   topPct: number;
 }
@@ -35,68 +43,129 @@ const STROKES = [
   { value: "serve", label: "发球" },
 ];
 
-const videoWrap: CSSProperties = {
-  position: "relative",
-  marginBottom: 12,
-};
+const videoWrap: CSSProperties = { position: "relative", marginBottom: 10 };
 
 const videoStyle: CSSProperties = {
-  maxWidth: "100%",
+  width: "100%",
   display: "block",
-  border: "1px solid #e0e0e0",
-  borderRadius: 8,
+  borderRadius: 10,
   background: "#000",
 };
 
 const videoArmed: CSSProperties = {
   ...videoStyle,
   cursor: "crosshair",
-  boxShadow: "0 0 0 3px rgba(66,133,244,0.55)",
+  boxShadow: "0 0 0 3px rgba(37,99,235,0.55)",
 };
 
 const markerStyle: CSSProperties = {
   position: "absolute",
-  width: 26,
-  height: 26,
-  marginLeft: -13,
-  marginTop: -13,
+  width: 28,
+  height: 28,
+  marginLeft: -14,
+  marginTop: -14,
   borderRadius: "50%",
-  border: "3px solid #ff5252",
-  background: "rgba(255,82,82,0.18)",
+  border: "3px solid #ef4444",
+  background: "rgba(239,68,68,0.18)",
   pointerEvents: "none",
-  boxShadow: "0 0 0 2px rgba(255,255,255,0.85)",
+  boxShadow: "0 0 0 2px rgba(255,255,255,0.9)",
 };
 
-const radioRow: CSSProperties = {
+const controlBar: CSSProperties = {
   display: "flex",
-  gap: 16,
-  margin: "4px 0 12px",
+  alignItems: "center",
+  gap: 10,
+  background: "#f9fafb",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: "8px 12px",
+  marginBottom: 8,
 };
 
-const selectBtn: CSSProperties = {
-  ...button,
-  marginBottom: 12,
+const sliderStyle: CSSProperties = { flex: 1, accentColor: colors.primary };
+
+const iconBtn: CSSProperties = {
+  border: `1px solid ${colors.border}`,
   background: "#fff",
-  color: "#1a73e8",
-  border: "1px solid #1a73e8",
+  borderRadius: 8,
+  width: 38,
+  height: 34,
+  fontSize: 14,
+  cursor: "pointer",
+  color: colors.text,
 };
 
-export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
-  // 在 effect 内创建/释放 blob URL：StrictMode 二次挂载时也能正确重建
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+const timeLabel: CSSProperties = {
+  fontVariantNumeric: "tabular-nums",
+  fontSize: 13,
+  color: colors.muted,
+  whiteSpace: "nowrap",
+};
+
+const segRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  margin: "14px 0 6px",
+};
+
+function segBtn(active: boolean): CSSProperties {
+  return {
+    flex: 1,
+    padding: "11px 0",
+    fontSize: 15,
+    fontWeight: 600,
+    borderRadius: 10,
+    border: `1px solid ${active ? colors.primary : colors.border}`,
+    background: active ? colors.primary : "#fff",
+    color: active ? "#fff" : colors.text,
+    cursor: "pointer",
+  };
+}
+
+const fieldLabel: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: colors.muted,
+  margin: "12px 0 6px",
+};
+
+function fmt(t: number): string {
+  if (!isFinite(t)) t = 0;
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+export default function PlayerPicker({ src, onConfirm }: PlayerPickerProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [strokeType, setStrokeType] = useState("forehand");
   const [picked, setPicked] = useState<Picked | null>(null);
   const [arming, setArming] = useState(false);
   const [preview, setPreview] = useState(true);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    const url = URL.createObjectURL(file);
-    setVideoUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    setPicked(null);
+    setCurrent(0);
+    setPlaying(false);
+  }, [src]);
 
-  // 仅在"选择球员"武装状态下，点击画面才视为点选（否则交给原生播放控制）
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play();
+    else v.pause();
+  };
+
+  const nudge = (delta: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, Math.min((duration || 0), v.currentTime + delta));
+  };
+
+  // 仅在"选择球员"武装状态下，点击画面才视为点选
   const handleVideoClick = (e: MouseEvent<HTMLVideoElement>) => {
     if (!arming) return;
     const video = e.currentTarget;
@@ -108,12 +177,7 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
     ) {
       return;
     }
-    // 点击落在原生控制栏区域（底部一条）时不作为点选
-    const controlBar = Math.min(52, video.clientHeight * 0.25);
-    if (video.clientHeight - e.nativeEvent.offsetY < controlBar) {
-      return;
-    }
-    e.preventDefault(); // 阻止本次点击触发播放/暂停
+    e.preventDefault();
     const cx = (e.nativeEvent.offsetX / video.clientWidth) * video.videoWidth;
     const cy = (e.nativeEvent.offsetY / video.clientHeight) * video.videoHeight;
     setPicked({
@@ -126,90 +190,117 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
     setArming(false);
   };
 
+  const armSelection = () => {
+    const v = videoRef.current;
+    if (v && !v.paused) v.pause(); // 点选前暂停，便于精确点击
+    setArming((a) => !a);
+  };
+
   const handleConfirm = () => {
-    const startTs = videoRef.current?.currentTime ?? 0;
     onConfirm({
       cx: picked?.cx,
       cy: picked?.cy,
       clickTs: picked?.ts,
-      startTs,
+      startTs: videoRef.current?.currentTime ?? 0,
       strokeType,
       preview,
     });
   };
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h2 style={h2}>第 2 步 · 选择动作并拖到动作开始处</h2>
+    <div style={card}>
+      <p style={stepHint}>第 2 步</p>
+      <h2 style={h2}>选择动作类型、定位动作并点选球员</h2>
       <p style={muted}>
-        先选择动作类型，再拖动进度条到动作<b>大致开始</b>的位置
-        （发球即抛球前后、正反手即开始引拍处）——<b>不需要对准击球瞬间</b>，
-        系统会自动在随后的片段里找到击球点。画面中有多人时，点下方按钮选中要
-        分析的球员（会自动跟踪其移动）；只有一个人可跳过。
+        先选动作类型；用下方进度条拖到动作<b>大致开始</b>的位置（发球即抛球前后、
+        正反手即开始引拍处），<b>无需对准击球瞬间</b>。画面有多人时点"选择球员"
+        标出要分析的人（会自动跟踪其移动），单人可跳过。
       </p>
 
-      <div style={radioRow}>
+      <div style={videoWrap}>
+        <video
+          ref={videoRef}
+          src={src}
+          onClick={handleVideoClick}
+          style={arming ? videoArmed : videoStyle}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+          onSeeked={(e) => setCurrent(e.currentTarget.currentTime)}
+        />
+        {picked ? (
+          <div
+            style={{ ...markerStyle, left: `${picked.leftPct}%`, top: `${picked.topPct}%` }}
+          />
+        ) : null}
+      </div>
+
+      {/* 脱离视频的独立控制条 */}
+      <div style={controlBar}>
+        <button type="button" style={iconBtn} onClick={togglePlay} aria-label="播放/暂停">
+          {playing ? "❚❚" : "►"}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.01}
+          value={Math.min(current, duration || 0)}
+          style={sliderStyle}
+          onChange={(e) => {
+            const t = Number(e.target.value);
+            if (videoRef.current) videoRef.current.currentTime = t;
+            setCurrent(t);
+          }}
+        />
+        <span style={timeLabel}>
+          {fmt(current)} / {fmt(duration)}
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+        <button type="button" style={iconBtn} onClick={() => nudge(-1)}>-1s</button>
+        <button type="button" style={iconBtn} onClick={() => nudge(-0.1)}>-0.1</button>
+        <button type="button" style={iconBtn} onClick={() => nudge(0.1)}>+0.1</button>
+        <button type="button" style={iconBtn} onClick={() => nudge(1)}>+1s</button>
+        <span style={{ ...muted, margin: "auto 0 0 8px", fontSize: 12 }}>
+          微调进度，精确定位动作开始处
+        </span>
+      </div>
+
+      <p style={fieldLabel}>动作类型</p>
+      <div style={segRow}>
         {STROKES.map((s) => (
-          <label
+          <button
             key={s.value}
-            style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+            type="button"
+            style={segBtn(strokeType === s.value)}
+            onClick={() => setStrokeType(s.value)}
           >
-            <input
-              type="radio"
-              name="stroke"
-              value={s.value}
-              checked={strokeType === s.value}
-              onChange={() => setStrokeType(s.value)}
-            />
-            <span>{s.label}</span>
-          </label>
+            {s.label}
+          </button>
         ))}
       </div>
 
-      {videoUrl ? (
-        <div style={videoWrap}>
-          <video
-            ref={videoRef}
-            controls
-            src={videoUrl}
-            onClick={handleVideoClick}
-            style={arming ? videoArmed : videoStyle}
-          />
-          {picked ? (
-            <div
-              style={{ ...markerStyle, left: `${picked.leftPct}%`, top: `${picked.topPct}%` }}
-              title={`已选球员 @ ${picked.ts.toFixed(1)}s`}
-            />
-          ) : null}
-        </div>
-      ) : null}
-
-      <button type="button" style={selectBtn} onClick={() => setArming((v) => !v)}>
-        {arming ? "请点击画面中的球员…" : picked ? "重新选择球员" : "选择球员"}
-      </button>
-      <p style={{ ...muted, marginTop: 0, fontSize: 13 }}>
-        {picked
-          ? `已在 ${picked.ts.toFixed(1)}s 处标记球员，分析时会自动跟踪他/她的移动；可拖到别的时间再点"重新选择球员"。`
-          : arming
-            ? "在画面中点击要分析的那位球员（红圈标记）。"
-            : "未选择球员时将自动选择画面中的球员。"}
-      </p>
+      <p style={fieldLabel}>要分析的球员（多人时选择）</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button type="button" style={buttonGhost} onClick={armSelection}>
+          {arming ? "请点击画面中的球员…" : picked ? "重新选择球员" : "选择球员"}
+        </button>
+        <span style={{ ...muted, margin: 0, fontSize: 13 }}>
+          {picked
+            ? `已在 ${fmt(picked.ts)} 处标记球员，分析时自动跟踪其移动`
+            : arming
+              ? "在画面中点击要分析的那位球员（红圈标记）"
+              : "未选择时自动选取画面中的球员"}
+        </span>
+      </div>
 
       <label
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          margin: "4px 0 12px",
-          cursor: "pointer",
-        }}
+        style={{ display: "flex", alignItems: "center", gap: 8, margin: "18px 0 14px", cursor: "pointer" }}
       >
-        <input
-          type="checkbox"
-          checked={preview}
-          onChange={(e) => setPreview(e.target.checked)}
-        />
-        <span>
+        <input type="checkbox" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
+        <span style={{ fontSize: 14 }}>
           仅生成动作帧拼贴图（预览，暂不调用通义千问）——先确认截取效果
         </span>
       </label>
@@ -217,10 +308,10 @@ export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
       <button type="button" style={button} onClick={handleConfirm}>
         动作从这里开始，自动定位击球点并分析
       </button>
-      <p style={{ ...muted, marginTop: 12, fontSize: 13 }}>
+      <p style={{ ...muted, marginTop: 10, marginBottom: 0, fontSize: 13 }}>
         {preview
-          ? "预览模式：只截取动作四联帧，不打开通义千问。确认拼贴图满意后，取消勾选再跑一次即可得到大模型分析。"
-          : "完整分析：截取动作四联帧后会自动打开通义千问分析（需先登录）。"}
+          ? "预览模式：只截取动作四联帧，不打开通义千问。满意后取消勾选再跑一次即可得到大模型分析。"
+          : "完整分析：截取四联帧后会自动打开通义千问分析（需先登录）。"}
       </p>
     </div>
   );

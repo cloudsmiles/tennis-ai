@@ -3,13 +3,38 @@ import type { JobResult, ProgressEvent } from "./types";
 
 export const BASE = "http://localhost:8000";
 
-/** POST /api/jobs：上传视频建分析任务，返回 job_id。
+/** POST /api/sources：提交 B站链接，后端下载后返回 source_id 与可播放地址。 */
+export async function createSource(
+  url: string,
+): Promise<{ source_id: string; video_url: string }> {
+  const form = new FormData();
+  form.append("url", url);
+  const res = await fetch(`${BASE}/api/sources`, { method: "POST", body: form });
+  if (!res.ok) {
+    let msg = `视频提取失败（HTTP ${res.status}）`;
+    try {
+      const d = (await res.json()) as { detail?: string };
+      if (d.detail) msg = d.detail;
+    } catch {
+      // 忽略解析失败，回退到通用提示
+    }
+    throw new Error(msg);
+  }
+  return (await res.json()) as { source_id: string; video_url: string };
+}
+
+/** 后端 source 视频的可播放地址（供 <video> 拖动定位）。 */
+export function sourceVideoUrl(sourceId: string): string {
+  return `${BASE}/api/sources/${sourceId}/video`;
+}
+
+/** POST /api/jobs：建分析任务，返回 job_id。
+ *  视频来源二选一：file（本地上传）或 sourceId（B站链接已下载的 source）。
  *  cx/cy 为球员点选的视频像素坐标，clickTs 为点选时的时间戳（后端在该帧锁定
  *  并全程跟踪该球员）；startTs+strokeType 为手动模式（用户把进度条拖到动作
- *  大致开始处并标注动作类型，后端自动定位击球帧）；skipLlm=true 只出拼贴图、
- *  不调用大模型。 */
+ *  大致开始处并标注动作类型，后端自动定位击球帧）；skipLlm=true 只出拼贴图。 */
 export async function createJob(
-  file: File,
+  source: { file?: File; sourceId?: string },
   opts: {
     cx?: number;
     cy?: number;
@@ -21,7 +46,8 @@ export async function createJob(
 ): Promise<string> {
   const { cx, cy, clickTs, skipLlm = false, startTs, strokeType } = opts;
   const form = new FormData();
-  form.append("video", file);
+  if (source.file) form.append("video", source.file);
+  if (source.sourceId) form.append("source_id", source.sourceId);
   if (cx !== undefined) form.append("cx", String(cx));
   if (cy !== undefined) form.append("cy", String(cy));
   if (clickTs !== undefined) form.append("click_ts", String(clickTs));
@@ -30,7 +56,7 @@ export async function createJob(
   form.append("skip_llm", skipLlm ? "true" : "false");
   const res = await fetch(`${BASE}/api/jobs`, { method: "POST", body: form });
   if (!res.ok) {
-    throw new Error(`上传失败（HTTP ${res.status}）`);
+    throw new Error(`创建任务失败（HTTP ${res.status}）`);
   }
   const data = (await res.json()) as { job_id: string };
   return data.job_id;

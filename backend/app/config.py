@@ -24,6 +24,7 @@ class Settings(BaseModel):
     llm_max_delay_s: float = 5.0
     llm_max_retries: int = 2
     data_dir: Path = BASE_DIR / ".pw-data"  # Playwright 持久用户目录
+    sources_dir: Path = BASE_DIR / "sources"  # B站等链接下载的源视频
 
 
 settings = Settings()

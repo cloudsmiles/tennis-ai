@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import progress, results, session, upload
+from .routes import progress, results, session, sources, upload
 
 
 def create_app() -> FastAPI:
@@ -16,6 +16,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(upload.router)
+    app.include_router(sources.router)
     app.include_router(progress.router)
     app.include_router(results.router)
     app.include_router(session.router)
