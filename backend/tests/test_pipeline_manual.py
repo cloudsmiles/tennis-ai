@@ -97,11 +97,11 @@ def test_manual_finds_impact_after_start_and_keeps_stroke(monkeypatch, tmp_path)
 
     result, cap = _run_manual("m1", fake_submit, monkeypatch, tmp_path)
 
-    # 窗口边界：从标注点向前覆盖 2.0s（正手/反手）、向前留 0.5s 余量
+    # 窗口边界：从标注点向前覆盖 1.3s（正手/反手）、向前留 0.4s 余量
     t0 = cap["center"] - cap["before"]
     t1 = cap["center"] + cap["after"]
-    assert abs((START_TS - t0) - 0.5) < 1e-6
-    assert abs((t1 - START_TS) - 2.0) < 1e-6
+    assert abs((START_TS - t0) - 0.4) < 1e-6
+    assert abs((t1 - START_TS) - 1.3) < 1e-6
 
     assert result.status == "done"
     assert len(result.actions) == 1

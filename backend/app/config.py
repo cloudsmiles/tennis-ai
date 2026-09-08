@@ -17,8 +17,8 @@ class Settings(BaseModel):
     crop_margin_ratio: float = 0.15  # 裁剪边距（相对人物框尺寸）
     # 手动模式：用户只标动作"大致开始"的时间点，后端在向前窗口内用速度峰值
     # 自动定位击球帧。发球动作链更长（抛球+举拍+挥击），给更长的前向窗口。
-    manual_before_margin_s: float = 0.5   # 标注点之前也留一点余量（标得稍晚也能截到引拍）
-    manual_forward_ground_s: float = 2.0  # 正手/反手：从准备到随挥的前向窗口
+    manual_before_margin_s: float = 0.4   # 标注点之前也留一点余量（标得稍晚也能截到引拍）
+    manual_forward_ground_s: float = 1.3  # 正手/反手：从引拍到随挥的前向窗口（收窄，避免抓到邻近动作）
     manual_forward_serve_s: float = 3.5   # 发球：抛球到随挥的前向窗口
     llm_min_delay_s: float = 2.0
     llm_max_delay_s: float = 5.0
