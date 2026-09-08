@@ -19,7 +19,7 @@ from playwright.sync_api import Error as PlaywrightError
 from ..config import settings
 from .browser import browser, is_zombie_error
 from .parse import parse_analysis
-from .prompts import ANALYSIS_PROMPT
+from .prompts import analysis_prompt
 from .selectors import SELECTORS, TONGYI_URL
 
 
@@ -73,7 +73,7 @@ def _require_login(page) -> None:
         ) from exc
 
 
-def analyze_image(image_path: Path) -> dict:
+def analyze_image(image_path: Path, stroke_type: str | None = None) -> dict:
     """One full tongyi conversation: new chat -> upload -> prompt -> parse.
 
     The whole goto→upload→fill→click→wait→grab-reply sequence runs in ONE
@@ -81,11 +81,15 @@ def analyze_image(image_path: Path) -> dict:
     — or exception, e.g. ``NotLoggedInError`` — is propagated back to the
     calling thread.
 
+    stroke_type（手动模式下用户标注的 forehand/backhand/serve）会写进 prompt，
+    让模型据此点评；为 None 时由模型自行分类。
+
     Raises ``NotLoggedInError`` when the browser session is not logged in;
     raises ``LLMParseError`` (carrying the raw reply in ``.raw``) when the
     reply is unparseable.
     """
     browser.ensure_started()
+    prompt = analysis_prompt(stroke_type)
 
     def _conversation(page):
         # NOTE: this runs on the browser-owner thread — drive the raw `page`
@@ -96,7 +100,7 @@ def analyze_image(image_path: Path) -> dict:
         page.wait_for_selector(SELECTORS["chat_input"], timeout=30000)
         page.set_input_files(SELECTORS["upload_button"], str(image_path))
         page.wait_for_timeout(2000)  # let the upload settle
-        page.fill(SELECTORS["chat_input"], ANALYSIS_PROMPT)
+        page.fill(SELECTORS["chat_input"], prompt)
         page.click(SELECTORS["send_button"])
         text = _wait_reply(page)
         try:
@@ -116,13 +120,13 @@ class LLMSerialQueue:
     def __init__(self):
         self._lock = threading.Lock()
 
-    def submit(self, image_path) -> dict:
+    def submit(self, image_path, stroke_type: str | None = None) -> dict:
         """Analyze one image; retries transient failures, keeps calls serial."""
         with self._lock:
             last_error = None
             for attempt in range(settings.llm_max_retries + 1):
                 try:
-                    result = analyze_image(Path(image_path))
+                    result = analyze_image(Path(image_path), stroke_type)
                     # cool-down between consecutive LLM calls (held under the
                     # lock on purpose: it also paces the next queued task)
                     time.sleep(

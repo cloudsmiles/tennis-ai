@@ -1,15 +1,27 @@
-// 第 2 步：在视频画面上点选要分析的球员（换算为视频像素坐标）。
-import { useEffect, useMemo } from "react";
+// 第 2 步：选择动作类型 → 拖动进度条到击球瞬间 → （可选）点选球员 → 确认。
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
-import { buttonSecondary, h2, muted } from "./styles";
+import { button, h2, muted } from "./styles";
+
+export interface AnalyzeOpts {
+  cx?: number;
+  cy?: number;
+  hitTs: number;
+  strokeType: string;
+  preview: boolean;
+}
 
 interface PlayerPickerProps {
   file: File;
-  /** 点击点选，cx/cy 为视频像素坐标 */
-  onPick: (cx: number, cy: number) => void;
-  /** 跳过点选，交给后端自动选择 */
-  onSkip: () => void;
+  /** 确认分析：hitTs 为击球瞬间（视频秒），strokeType 为动作类型，cx/cy 为球员像素坐标（可空） */
+  onConfirm: (opts: AnalyzeOpts) => void;
 }
+
+const STROKES = [
+  { value: "forehand", label: "正手" },
+  { value: "backhand", label: "反手" },
+  { value: "serve", label: "发球" },
+];
 
 const videoStyle: CSSProperties = {
   maxWidth: "100%",
@@ -21,17 +33,28 @@ const videoStyle: CSSProperties = {
   background: "#000",
 };
 
-export default function PlayerPicker({ file, onPick, onSkip }: PlayerPickerProps) {
-  const videoUrl = useMemo(() => URL.createObjectURL(file), [file]);
+const radioRow: CSSProperties = {
+  display: "flex",
+  gap: 16,
+  margin: "4px 0 12px",
+};
 
-  // 卸载或换文件时释放 blob URL
+export default function PlayerPicker({ file, onConfirm }: PlayerPickerProps) {
+  // 在 effect 内创建/释放 blob URL：StrictMode 二次挂载时也能正确重建
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [strokeType, setStrokeType] = useState("forehand");
+  const [picked, setPicked] = useState<{ cx: number; cy: number } | null>(null);
+  const [preview, setPreview] = useState(true);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   useEffect(() => {
-    return () => URL.revokeObjectURL(videoUrl);
-  }, [videoUrl]);
+    const url = URL.createObjectURL(file);
+    setVideoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   const handleClick = (e: MouseEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
-    // 元数据未就绪或尺寸异常时无法换算，忽略本次点击
     if (
       video.videoWidth <= 0 ||
       video.videoHeight <= 0 ||
@@ -45,23 +68,91 @@ export default function PlayerPicker({ file, onPick, onSkip }: PlayerPickerProps
     if (video.clientHeight - e.nativeEvent.offsetY < controlBar) {
       return;
     }
-    // 点击位置（控件内偏移）→ 视频像素坐标
     const cx = (e.nativeEvent.offsetX / video.clientWidth) * video.videoWidth;
     const cy = (e.nativeEvent.offsetY / video.clientHeight) * video.videoHeight;
-    onPick(cx, cy);
+    setPicked({ cx, cy });
+  };
+
+  const handleConfirm = () => {
+    const hitTs = videoRef.current?.currentTime ?? 0;
+    onConfirm({
+      cx: picked?.cx,
+      cy: picked?.cy,
+      hitTs,
+      strokeType,
+      preview,
+    });
   };
 
   return (
     <div style={{ maxWidth: 720 }}>
-      <h2 style={h2}>第 2 步 · 选择要分析的球员</h2>
+      <h2 style={h2}>第 2 步 · 选择动作并定位击球瞬间</h2>
       <p style={muted}>
-        拖动进度条到能同时看清双方球员的画面，然后点击画面中要分析的那位
-        球员（点击位置会换算成视频像素坐标）。画面中只有一个人时可直接跳过。
+        先选择动作类型，再拖动进度条到<b>击球瞬间</b>，然后点击画面中要分析的球员
+        （多人时；只有一个人可跳过点选），最后点确认。
       </p>
-      <video controls src={videoUrl} onClick={handleClick} style={videoStyle} />
-      <button type="button" onClick={onSkip} style={buttonSecondary}>
-        跳过，自动选择
+
+      <div style={radioRow}>
+        {STROKES.map((s) => (
+          <label
+            key={s.value}
+            style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          >
+            <input
+              type="radio"
+              name="stroke"
+              value={s.value}
+              checked={strokeType === s.value}
+              onChange={() => setStrokeType(s.value)}
+            />
+            <span>{s.label}</span>
+          </label>
+        ))}
+      </div>
+
+      {videoUrl ? (
+        <video
+          ref={videoRef}
+          controls
+          src={videoUrl}
+          onClick={handleClick}
+          style={videoStyle}
+        />
+      ) : null}
+
+      <p style={{ ...muted, marginTop: 0, fontSize: 13 }}>
+        {picked
+          ? "已记录球员位置；如需改选可直接点击画面中另一位球员。"
+          : "未点选球员时将自动选择画面中的球员。"}
+      </p>
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          margin: "4px 0 12px",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={preview}
+          onChange={(e) => setPreview(e.target.checked)}
+        />
+        <span>
+          仅生成动作帧拼贴图（预览，暂不调用通义千问）——先确认截取效果
+        </span>
+      </label>
+
+      <button type="button" style={button} onClick={handleConfirm}>
+        确认当前画面为击球瞬间，开始分析
       </button>
+      <p style={{ ...muted, marginTop: 12, fontSize: 13 }}>
+        {preview
+          ? "预览模式：只截取动作三联帧，不打开通义千问。确认拼贴图满意后，取消勾选再跑一次即可得到大模型分析。"
+          : "完整分析：截取动作三联帧后会自动打开通义千问分析（需先登录）。"}
+      </p>
     </div>
   );
 }

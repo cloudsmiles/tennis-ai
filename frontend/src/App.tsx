@@ -126,22 +126,39 @@ export default function App() {
     setScreen("pick");
   };
 
-  // 选人 / 跳过之后开始分析。cx/cy 为视频像素坐标（跳过时不传）。
-  const startAnalysis = async (cx?: number, cy?: number) => {
+  // 第 2 步确认后开始分析。hitTs 为击球瞬间（视频秒），strokeType 为用户标注的
+  // 动作类型，cx/cy 为球员点选的视频像素坐标（可空）。
+  // preview=true：只跑到生成动作帧拼贴图，不检查登录、不调用通义千问。
+  const startAnalysis = async (opts: {
+    cx?: number;
+    cy?: number;
+    hitTs?: number;
+    strokeType?: string;
+    preview?: boolean;
+  }) => {
     if (!file) return;
+    const { cx, cy, hitTs, strokeType, preview = false } = opts;
     setNotice(null);
     setError(null);
     try {
-      // 先检查登录态：未登录则不建任务，弹窗提示后打开登录窗口
-      const loggedIn = await getLoginStatus();
-      if (!loggedIn) {
-        window.alert(LOGIN_ALERT);
-        await login();
-        setScreen("pick");
-        return;
+      // 完整分析才需要先检查登录态；预览模式不碰浏览器/大模型
+      if (!preview) {
+        const loggedIn = await getLoginStatus();
+        if (!loggedIn) {
+          window.alert(LOGIN_ALERT);
+          await login();
+          setScreen("pick");
+          return;
+        }
       }
 
-      const jid = await createJob(file, cx, cy);
+      const jid = await createJob(file, {
+        cx,
+        cy,
+        hitTs,
+        strokeType,
+        skipLlm: preview,
+      });
       setJobId(jid);
       setJob(null);
       setEvt({ progress: 0, stage: "queued", message: "任务已创建，等待分析…" });
@@ -202,11 +219,7 @@ export default function App() {
       {effScreen === "upload" ? <Uploader onFile={handleFile} /> : null}
 
       {effScreen === "pick" && file ? (
-        <PlayerPicker
-          file={file}
-          onPick={(cx, cy) => void startAnalysis(cx, cy)}
-          onSkip={() => void startAnalysis()}
-        />
+        <PlayerPicker file={file} onConfirm={(o) => void startAnalysis(o)} />
       ) : null}
 
       {effScreen === "progress" ? (

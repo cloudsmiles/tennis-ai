@@ -73,8 +73,8 @@ def _run_pipeline(job_id, submit, monkeypatch, tmp_path):
 def test_parse_failed_action_keeps_raw_reply_and_job_continues(monkeypatch, tmp_path):
     submitted = []
 
-    def fake_submit(path):
-        submitted.append(path)
+    def fake_submit(path, stroke_type=None):
+        submitted.append((path, stroke_type))
         if len(submitted) == 1:
             raise LLMParseError("原始回复")  # 第 1 个动作解析失败
         return {  # 第 2 个动作照常拿到结构化结果
@@ -103,7 +103,7 @@ def test_parse_failed_action_keeps_raw_reply_and_job_continues(monkeypatch, tmp_
 def test_not_logged_in_still_fails_whole_job(monkeypatch, tmp_path):
     """登录缺失仍是任务级失败（保持原行为，防止 except 顺序回归）。"""
 
-    def fake_submit(path):
+    def fake_submit(path, stroke_type=None):
         raise NotLoggedInError("tongyi not logged in")
 
     result = _run_pipeline("pf2", fake_submit, monkeypatch, tmp_path)
