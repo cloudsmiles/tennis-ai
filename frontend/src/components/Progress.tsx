@@ -1,4 +1,5 @@
 // 第 3 步：分析进度（进度条 + 最新一条 stage/message）。
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { h2, muted } from "./styles";
 
@@ -7,6 +8,9 @@ interface ProgressProps {
   stage: string;
   message: string;
 }
+
+/** 大模型阶段模拟进度的天花板；该动作真正完成后后端会推 95/100 覆盖 */
+const LLM_CEIL = 95;
 
 const trackStyle: CSSProperties = {
   width: "100%",
@@ -18,7 +22,29 @@ const trackStyle: CSSProperties = {
 };
 
 export default function Progress({ progress, stage, message }: ProgressProps) {
-  const pct = Math.max(0, Math.min(100, Math.round(progress)));
+  const [display, setDisplay] = useState(progress);
+
+  // 服务端真实进度：analyzing 阶段只许前进（防止模拟值被旧事件拉回）；
+  // 其余阶段直接对齐真实值（done 立即到 100）。
+  useEffect(() => {
+    setDisplay((d) => (stage === "analyzing" ? Math.max(d, progress) : progress));
+  }, [progress, stage]);
+
+  // 单次大模型回复可能耗时数十秒到数分钟，期间后端无任何事件；
+  // 在 70%~95% 之间渐近爬升，避免进度条长时间静止（纯展示，不影响真实状态）。
+  useEffect(() => {
+    if (stage !== "analyzing") return;
+    const t = window.setInterval(() => {
+      setDisplay((d) => {
+        if (d < progress) return progress;
+        if (d >= LLM_CEIL) return LLM_CEIL;
+        return Math.min(LLM_CEIL, d + Math.max(0.12, (LLM_CEIL - d) * 0.03));
+      });
+    }, 400);
+    return () => window.clearInterval(t);
+  }, [stage, progress]);
+
+  const pct = Math.max(0, Math.min(100, Math.round(display)));
   return (
     <div style={{ maxWidth: 720 }}>
       <h2 style={h2}>第 3 步 · 分析中…</h2>

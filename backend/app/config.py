@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -15,24 +16,24 @@ class Settings(BaseModel):
     follow_offset_frames: int = 6    # 随挥帧在峰值后多少帧
     prep_min_gap_frames: int = 3     # 引拍帧至少在峰值前多少帧
     crop_margin_ratio: float = 0.15  # 裁剪边距（相对人物框尺寸）
-    # 手动模式：用户只标动作"大致开始"的时间点，后端在标注点之后的窗口内用速度
-    # 峰值定位击球帧，再以击球帧为锚点按固定时长取四帧（见 manual_*_s）。
-    manual_before_margin_s: float = 0.7   # 标注点之前的余量（截引拍起点用）
-    manual_forward_ground_s: float = 1.7  # 正手/反手前向窗口
-    manual_forward_serve_s: float = 3.8   # 发球前向窗口（抛球+举拍+挥击更长）
-    # 击球帧搜索范围：只在标注点之后的这段时间内找最强速度峰（避免抓到邻近动作）
-    manual_peak_search_ground_s: float = 1.2
-    manual_peak_search_serve_s: float = 2.6
-    # 以击球帧为锚的四帧时间偏移（秒）：引拍起点 / 随挥结束
-    manual_ready_before_ground_s: float = 0.65
-    manual_ready_before_serve_s: float = 1.3
-    manual_follow_after_ground_s: float = 0.5
-    manual_follow_after_serve_s: float = 0.6
+    # 手动模式：用户用进度条框出单个动作的时间范围 [start_ts, end_ts]
+    # （起=准备/引拍开始，止=随挥结束）。抽帧窗口取该范围外加这段边距，
+    # 供边缘裁剪与球员全程跟踪使用；后端在范围内自动找击球帧、按姿态差异选帧。
+    manual_window_margin_s: float = 0.35
     llm_min_delay_s: float = 2.0
     llm_max_delay_s: float = 5.0
     llm_max_retries: int = 2
     data_dir: Path = BASE_DIR / ".pw-data"  # Playwright 持久用户目录
     sources_dir: Path = BASE_DIR / "sources"  # B站等链接下载的源视频
+    # 无头浏览器：Linux 部署默认无头；本机调试可设 QW_HEADLESS=0 弹出窗口人工观察。
+    # 登录走网页内手机号+验证码，整个浏览器对终端用户不可见（客户无感）。
+    headless: bool = os.environ.get("QW_HEADLESS", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    viewport_width: int = 1440
+    viewport_height: int = 900
 
 
 settings = Settings()

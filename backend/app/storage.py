@@ -19,6 +19,14 @@ def video_path(job_id: str) -> Path:
     vids = list(d.glob("video.*"))
     return vids[0] if vids else d / "video.mp4"
 
+def delete_video(job_id: str) -> None:
+    """删除该任务目录下的源视频拷贝（抽帧/拼贴图完成后已不再需要）。"""
+    for p in job_dir(job_id).glob("video.*"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
 def source_dir(source_id: str) -> Path:
     d = settings.sources_dir / source_id
     d.mkdir(parents=True, exist_ok=True)
@@ -33,6 +41,10 @@ def source_video_path(source_id: str) -> Path:
 
 def montage_path(job_id: str, action_id: int) -> Path:
     return job_dir(job_id) / "montages" / f"action_{action_id}.jpg"
+
+
+def annotated_montage_path(job_id: str, action_id: int) -> Path:
+    return job_dir(job_id) / "montages" / f"action_{action_id}_annotated.jpg"
 
 def save_result(result: JobResult) -> None:
     result.to_json(job_dir(result.job_id) / "result.json")

@@ -62,10 +62,13 @@ def _run_pipeline(job_id, submit, monkeypatch, tmp_path):
         pipeline,
         "Detector",
         lambda: types.SimpleNamespace(
-            detect_frames=lambda frames, ts, tp, target_ts=None: _fake_dets()
+            detect_frames=lambda frames, ts, tp, target_ts=None,
+                on_progress=None: _fake_dets()
         ),
     )
     monkeypatch.setattr(pipeline, "make_montage", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "make_annotated_montage",
+                        lambda *a, **k: None)
     monkeypatch.setattr(pipeline, "llm_queue", types.SimpleNamespace(submit=submit))
     return pipeline.run_pipeline(job_id)
 
@@ -79,9 +82,10 @@ def test_parse_failed_action_keeps_raw_reply_and_job_continues(monkeypatch, tmp_
             raise LLMParseError("原始回复")  # 第 1 个动作解析失败
         return {  # 第 2 个动作照常拿到结构化结果
             "stroke_type": "forehand",
-            "scores": {"准备": 8},
-            "overall": 7.5,
-            "issues": ["击球点偏晚"],
+            "level": "3.5",
+            "level_note": "发力链基本顺畅",
+            "strengths": ["转体充分"],
+            "weaknesses": ["击球点偏晚"],
             "advice": "提前引拍",
         }
 
@@ -92,7 +96,8 @@ def test_parse_failed_action_keeps_raw_reply_and_job_continues(monkeypatch, tmp_
     a0, a1 = result.actions
     assert a0.status == "parse_failed" and a0.raw_reply == "原始回复"
     assert a1.status == "ok" and a1.stroke_type == "forehand"
-    assert a1.overall == 7.5 and a1.issues == ["击球点偏晚"]
+    assert a1.level == "3.5" and a1.weaknesses == ["击球点偏晚"]
+    assert a1.strengths == ["转体充分"]
     assert len(submitted) == 2  # 第二个动作仍然被提交分析
 
     saved = storage.load_result("pf1")  # 落盘结果同样保留原文（前端展示用）

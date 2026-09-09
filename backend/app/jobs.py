@@ -9,7 +9,7 @@ from .pipeline import run_pipeline
 from .schemas import JobResult
 
 # 终态：SSE 事件流的断流条件（progress 路由同款集合）
-_TERMINAL_STAGES = ("done", "error", "login_required")
+_TERMINAL_STAGES = ("done", "error", "login_required", "captcha_required")
 
 
 class JobManager:
@@ -18,21 +18,26 @@ class JobManager:
         self._lock = threading.Lock()
 
     def create(self, video_src_path, filename, target_player=None, skip_llm=False,
-               start_ts=None, stroke_type=None, click_ts=None) -> str:
-        """复制上传的临时文件到 job 目录并启动后台管线线程，返回 job_id。"""
+               start_ts=None, end_ts=None, stroke_type=None,
+               click_ts=None, delete_video=False) -> str:
+        """复制上传的临时文件到 job 目录并启动后台管线线程，返回 job_id。
+
+        delete_video=True 时（本地上传），管线抽帧生成拼贴图后删除 job 目录里
+        的视频拷贝；B站来源视频在 sources/ 共享，不在此删除。
+        """
         job_id = uuid.uuid4().hex[:12]
         storage.create_job(job_id, filename)
         shutil.copy(video_src_path, storage.video_path(job_id))
         threading.Thread(
             target=self._run,
-            args=(job_id, target_player, skip_llm, start_ts, stroke_type,
-                  click_ts),
+            args=(job_id, target_player, skip_llm, start_ts, end_ts,
+                  stroke_type, click_ts, delete_video),
             daemon=True, name=f"job-{job_id}",
         ).start()
         return job_id
 
     def _run(self, job_id, target_player, skip_llm=False, start_ts=None,
-             stroke_type=None, click_ts=None):
+             end_ts=None, stroke_type=None, click_ts=None, delete_video=False):
         def on_progress(pct, stage, msg):
             r = storage.load_result(job_id)
             if r is None:
@@ -50,7 +55,8 @@ class JobManager:
         try:
             result = run_pipeline(
                 job_id, target_player, on_progress, skip_llm=skip_llm,
-                start_ts=start_ts, stroke_type=stroke_type, click_ts=click_ts,
+                start_ts=start_ts, end_ts=end_ts, stroke_type=stroke_type,
+                click_ts=click_ts, delete_video=delete_video,
             )
         except Exception as e:
             r = storage.load_result(job_id)

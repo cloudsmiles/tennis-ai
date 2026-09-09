@@ -98,33 +98,46 @@ class Detector:
 
     # ------------------------------------------------------------------
     def detect_frames(self, frames, timestamps, target_player=None,
-                      target_ts=None):
+                      target_ts=None, on_progress=None):
         """frames: BGR ndarray 列表; timestamps: 每帧时间戳（秒）。
 
         target_player=(cx,cy)：用户点选的视频像素坐标；配合 target_ts（点击发生
         的时间戳）在最近的那帧锁定距该点最近的 person 的 track id，随后整段跟随
         此人。target_ts 为 None 时（自动模式/旧调用）在首帧锁定。target_player
-        为 None 时取面积最大者。
+        为 None 时取面积最大者。on_progress(done, total) 在逐帧推理（CPU 上最耗时
+        的一段）每完成一帧回调一次，用于驱动进度条。
         """
         # 第一段：整段跟踪，收集每帧的 person / racket 原始信息
         info = []  # [(pose_res, persons, rackets), ...]
-        for frame in frames:
+        total = len(frames)
+        for fi, frame in enumerate(frames):
             pr = self.pose.track(frame, persist=True, classes=[0],
                                  device=self.device, verbose=False)[0]
             dr = self.det(frame, classes=[38], device=self.device,
                           verbose=False)[0]
             info.append((pr, self._parse_persons(pr), self._parse_rackets(dr)))
+            if on_progress is not None:
+                on_progress(fi + 1, total)
 
         lock_id = self._choose_lock_id(info, list(timestamps),
                                        target_player, target_ts)
 
         # 第二段：每帧用锁定的 track id 选人（id 丢失时回退面积最大者）
-        out = []
-        for i, (pr, persons, rackets) in enumerate(info):
+        chosen = []
+        for pr, persons, rackets in info:
             person = self._person_with_id(persons, lock_id)
             box = person["box"] if person else None
-            racket = self._pick_racket(rackets, box)
-            wrist = self._pick_wrist(person, racket)
+            chosen.append((person, self._pick_racket(rackets, box)))
+
+        # 先用"看得到球拍"的帧投票锁定持拍臂：击球瞬间运动模糊常让球拍整段
+        # 漏检，若每帧独立取"更低的手腕"，两手近乎等高时会在左右臂间逐帧翻转，
+        # 凭空造出大幅位移尖峰。锁定后无球拍帧也始终跟同一只手腕。
+        arm_side = self._racket_arm_side(chosen)
+
+        out = []
+        for i, (person, racket) in enumerate(chosen):
+            box = person["box"] if person else None
+            wrist = self._pick_wrist(person, racket, arm_side)
             out.append(FrameDet(
                 frame_idx=i, ts=float(timestamps[i]),
                 player_box=box,
@@ -215,11 +228,41 @@ class Detector:
         return min(rackets, key=lambda r: _dist2(_box_center(r["box"]), pc))
 
     # ------------------------------------------------------------------
-    def _pick_wrist(self, person, racket):
+    def _racket_arm_side(self, chosen):
+        """从"看得到球拍"的帧投票判定持拍臂是左手腕还是右手腕。
+
+        chosen: [(person, racket), ...]。逐帧比较两只手腕到球拍中心的距离，
+        仅当一只手腕明显更近（距离 < 另一只的 80%）时计一票——双手握拍时两手
+        都贴在拍柄、距离相当，此时不锁定（返回 None），交由逐帧回退处理。
+        """
+        votes = {WRIST_LEFT: 0, WRIST_RIGHT: 0}
+        for person, racket in chosen:
+            if person is None or racket.get("box") is None:
+                continue
+            kp = person.get("kp")
+            if kp is None or int(kp.shape[0]) <= WRIST_RIGHT:
+                continue
+            pts = {}
+            for j in (WRIST_LEFT, WRIST_RIGHT):
+                if float(kp[j][2]) > KP_CONF:
+                    pts[j] = (float(kp[j][0]), float(kp[j][1]))
+            if len(pts) < 2:
+                continue
+            rc = _box_center(racket["box"])
+            near = min(pts, key=lambda j: _dist2(pts[j], rc))
+            other = WRIST_RIGHT if near == WRIST_LEFT else WRIST_LEFT
+            if _dist2(pts[near], rc) < 0.64 * _dist2(pts[other], rc):
+                votes[near] += 1
+        best = max(votes, key=votes.get)
+        return best if votes[best] > 0 else None
+
+    # ------------------------------------------------------------------
+    def _pick_wrist(self, person, racket, arm_side=None):
         """持拍侧手腕 (x,y) 或 None。
 
         - 有球拍：取距球拍中心最近的那只手腕；
-        - 无球拍：取 y 更大（位置更低）的那只。
+        - 无球拍、已锁定持拍臂(arm_side)：始终取该侧手腕（身份不随帧翻转）；
+        - 无球拍、未锁定：取 y 更大（位置更低）的那只（旧回退）。
         仅统计置信度 > 0.3 的关键点。
         """
         if person is None:
@@ -227,18 +270,21 @@ class Detector:
         kp = person.get("kp")
         if kp is None or int(kp.shape[0]) <= WRIST_RIGHT:
             return None
-        wrists = []
+        wrists = {}
         for j in (WRIST_LEFT, WRIST_RIGHT):
             x, y, c = (float(v) for v in kp[j][:3])
             if c > KP_CONF:
-                wrists.append((x, y))
+                wrists[j] = (x, y)
         if not wrists:
             return None
         if racket.get("box") is not None:
             rc = _box_center(racket["box"])
-            x, y = min(wrists, key=lambda p: _dist2(p, rc))
+            j = min(wrists, key=lambda k: _dist2(wrists[k], rc))
+        elif arm_side is not None and arm_side in wrists:
+            j = arm_side
         else:
-            x, y = max(wrists, key=lambda p: p[1])
+            j = max(wrists, key=lambda k: wrists[k][1])
+        x, y = wrists[j]
         return (float(x), float(y))
 
     # ------------------------------------------------------------------

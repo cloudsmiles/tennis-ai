@@ -12,17 +12,22 @@ export interface ActionRecord {
   peak_ts: number;
   /** 相对 job 目录的拼贴图路径，如 "montages/action_0.jpg" */
   montage_path: string;
+  /** 叠加检测标注（球员框/球拍框/手腕/跟踪点）的调试版拼贴 */
+  debug_montage_path?: string | null;
   /** 本地检测疑似发球 */
   suspected_serve: boolean;
   status: ActionStatus;
   /** forehand | backhand | serve | null（未知） */
   stroke_type: string | null;
-  /** 分项得分，键为中文维度名（"准备"/"击球点"/"随挥"…） */
-  scores: Record<string, number> | null;
-  /** 总分（0-10） */
-  overall: number | null;
-  issues: string[] | null;
-  advice: string | null;
+  /** NTRP 风格评级（"2.0"~"5.0"），旧记录可能为空 */
+  level?: string | null;
+  /** 定级理由 */
+  level_note?: string | null;
+  /** 优点 */
+  strengths?: string[] | null;
+  /** 缺点 / 待改进点（旧记录字段名为 issues） */
+  weaknesses?: string[] | null;
+  advice?: string | null;
   /** 大模型原始回复（失败时展示给用户） */
   raw_reply: string;
 }

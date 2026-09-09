@@ -1,7 +1,7 @@
 """GET /api/jobs/{job_id}/events：SSE 进度流。
 
 裁定（修正原计划 bug）：轮询队列超时（queue.Empty）时 **continue** 保持连接，
-只在收到终结事件（stage 为 done / error / login_required）时断流，客户端
+只在收到终结事件（stage 为 done / error / login_required / captcha_required）时断流，客户端
 断开由框架触发 GeneratorExit → finally 退订。
 
 终态兜底（final review）：任务可能在客户端订阅前就已终结（如抽帧秒败），
@@ -20,7 +20,7 @@ from ..jobs import job_manager
 router = APIRouter()
 
 SSE_POLL_TIMEOUT = 15.0  # 秒；测试里可调小验证 continue-on-timeout
-TERMINAL_STAGES = ("done", "error", "login_required")
+TERMINAL_STAGES = ("done", "error", "login_required", "captcha_required")
 TERMINAL_STATUSES = ("done", "error")
 
 

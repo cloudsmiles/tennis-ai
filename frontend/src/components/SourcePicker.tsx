@@ -78,11 +78,8 @@ export default function SourcePicker({ onFile, onSource }: SourcePickerProps) {
   return (
     <div style={card}>
       <p style={stepHint}>第 1 步</p>
-      <h2 style={h2}>选择要分析的视频</h2>
-      <p style={muted}>
-        上传本地视频，或粘贴 B站视频链接由系统下载。之后你可以选择动作类型、
-        拖动到动作开始处并点选球员，系统会自动截取关键帧并交给通义千问点评。
-      </p>
+      <h2 style={h2}>选择视频</h2>
+      <p style={muted}>上传本地视频，或粘贴 B站链接自动提取。</p>
 
       <div style={tabsWrap}>
         <button type="button" style={tabStyle(tab === "upload")} onClick={() => setTab("upload")}>
@@ -158,7 +155,7 @@ export default function SourcePicker({ onFile, onSource }: SourcePickerProps) {
             <p style={{ ...muted, color: colors.danger, marginBottom: 8 }}>{error}</p>
           ) : (
             <p style={{ ...muted, marginBottom: 8 }}>
-              免登录提取可用的最高清晰度；下载完成后会自动进入下一步。
+              自动提取最高清版本，完成后进入下一步。
             </p>
           )}
           <button type="button" style={buttonGhost} onClick={() => setTab("upload")}>

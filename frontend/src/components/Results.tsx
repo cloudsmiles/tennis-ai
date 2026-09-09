@@ -1,4 +1,5 @@
 // 第 4 步：展示每个动作的拼贴图与通义千问的评分 / 问题 / 建议。
+import { useState } from "react";
 import { montageUrl } from "../api";
 import type { ActionRecord, JobResult } from "../types";
 import { card, h2, muted } from "./styles";
@@ -15,35 +16,84 @@ function strokeLabel(t: string | null): string {
   return STROKE_LABELS[t] ?? t;
 }
 
+/** 评级徽标配色：等级越高越绿 */
+function levelColor(level: string): { bg: string; fg: string } {
+  const v = parseFloat(level);
+  if (!isFinite(v)) return { bg: "#eef2ff", fg: "#3730a3" };
+  if (v >= 4.0) return { bg: "#dcfce7", fg: "#166534" };
+  if (v >= 3.0) return { bg: "#dbeafe", fg: "#1e40af" };
+  return { bg: "#fef3c7", fg: "#92400e" };
+}
+
+function PointList({
+  title,
+  items,
+  color,
+}: {
+  title: string;
+  items: string[];
+  color: string;
+}) {
+  if (!items.length) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <p style={{ margin: "0 0 4px", fontWeight: 700, color }}>{title}</p>
+      <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.7 }}>
+        {items.map((s, i) => (
+          <li key={i}>{s}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function OkBody({ a }: { a: ActionRecord }) {
-  const entries = Object.entries(a.scores ?? {});
+  const strengths = a.strengths ?? [];
+  const weaknesses = a.weaknesses ?? [];
+  const lc = a.level ? levelColor(a.level) : null;
   return (
     <div>
-      <p style={{ margin: "0 0 6px" }}>
-        <strong>
-          总分：{a.overall != null ? `${a.overall.toFixed(1)} / 10` : "—"}
-        </strong>
-      </p>
-      {entries.length > 0 ? (
-        <p style={{ margin: "0 0 6px" }}>
-          分项：{entries.map(([k, v]) => `${k} ${v}`).join("，")}
-        </p>
-      ) : null}
-      {a.issues && a.issues.length > 0 ? (
-        <div style={{ margin: "0 0 6px" }}>
-          主要问题：
-          <ul style={{ margin: "4px 0 8px", paddingLeft: 22 }}>
-            {a.issues.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ul>
+      {a.level ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "4px 14px",
+              borderRadius: 999,
+              fontSize: 18,
+              fontWeight: 800,
+              background: lc!.bg,
+              color: lc!.fg,
+            }}
+          >
+            {a.level}
+          </span>
+          <span style={{ fontSize: 13, color: "#6b7280" }}>
+            NTRP 风格综合评级
+          </span>
         </div>
       ) : null}
+      {a.level_note ? (
+        <p style={{ margin: "0 0 10px", lineHeight: 1.7 }}>{a.level_note}</p>
+      ) : null}
+      <PointList title="优点" items={strengths} color="#15803d" />
+      <PointList title="缺点与改进点" items={weaknesses} color="#b45309" />
       {a.advice ? (
-        <p style={{ margin: "0 0 4px" }}>
-          <strong>建议：</strong>
-          {a.advice}
-        </p>
+        <div
+          style={{
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: 10,
+            padding: "10px 14px",
+            marginTop: 4,
+          }}
+        >
+          <p style={{ margin: "0 0 4px", fontWeight: 700, color: "#1d4ed8" }}>
+            训练建议
+          </p>
+          <p style={{ margin: 0, lineHeight: 1.7 }}>{a.advice}</p>
+        </div>
       ) : null}
     </div>
   );
@@ -79,13 +129,38 @@ function FailedBody({ a }: { a: ActionRecord }) {
 }
 
 function ActionCard({ jobId, a }: { jobId: string; a: ActionRecord }) {
+  const [showDebug, setShowDebug] = useState(false);
+  const debugSrc =
+    a.debug_montage_path && showDebug
+      ? montageUrl(jobId, a.debug_montage_path)
+      : montageUrl(jobId, a.montage_path);
   return (
     <div style={card}>
       <img
-        src={montageUrl(jobId, a.montage_path)}
+        src={debugSrc}
         alt={`动作 ${a.action_id + 1} 关键帧拼贴`}
         style={{ width: "100%", borderRadius: 6, display: "block" }}
       />
+      {a.debug_montage_path ? (
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            margin: "8px 0 0",
+            fontSize: 13,
+            color: "#555",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showDebug}
+            onChange={(e) => setShowDebug(e.target.checked)}
+          />
+          显示识别标注（绿=球员框，橙=球拍，蓝=手腕，红叉=跟踪点）
+        </label>
+      ) : null}
       <h3 style={{ margin: "12px 0 8px", fontSize: 17 }}>
         动作 {a.action_id + 1}（{a.peak_ts.toFixed(1)}s）· {strokeLabel(a.stroke_type)}
       </h3>

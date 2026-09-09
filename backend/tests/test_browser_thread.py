@@ -75,6 +75,46 @@ def test_submit_propagates_exceptions():
         browser._submit(boom)
 
 
+def test_status_queued_behind_long_task_is_busy_without_kill(monkeypatch):
+    """分析等长任务占用 owner 时：状态查询超时返回 None（忙），且绝不能
+    触发浏览器强杀——否则会把正在正常进行的分析杀掉。"""
+    import app.llm.browser as bm
+    import time
+
+    monkeypatch.setattr(bm, "OP_TIMEOUT_STATUS", 0.5)
+    s = BrowserSession()
+    s.page = object()  # 绕过"未启动"快路径，让 _check 真的排队
+    release = threading.Event()
+    killed = []
+    monkeypatch.setattr(s, "_recover_from_hang", lambda: killed.append(1))
+
+    long_task = s._ensure_executor().submit(lambda: release.wait(5))
+    time.sleep(0.2)  # 等长任务占住 owner
+    try:
+        assert s.is_logged_in() is None
+        assert killed == []  # 排队超时 ≠ 挂死，不得恢复/杀进程
+    finally:
+        release.set()
+    assert long_task.result(5) is True  # 长任务安然跑完
+
+
+def test_submit_timeout_triggers_recovery(monkeypatch):
+    """A wedged owner-thread call raises after the timeout AND triggers the
+    force-kill/recover path once (regression: evaluate used to hang forever,
+    freezing login-status/login/analysis requests behind it)."""
+    import concurrent.futures
+    import time
+
+    s = BrowserSession()  # own executor, never touched again after this test
+    recovered = []
+    monkeypatch.setattr(
+        s, "_recover_from_hang", lambda: recovered.append("recover")
+    )
+    with pytest.raises(concurrent.futures.TimeoutError):
+        s._submit(lambda: time.sleep(1.0), timeout=0.2)
+    assert recovered == ["recover"]
+
+
 def test_is_zombie_error_classification():
     """Only closed-target Playwright errors count as zombies."""
     assert is_zombie_error(

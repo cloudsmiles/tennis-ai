@@ -22,6 +22,7 @@ async def create_job(
     cy: Optional[float] = Form(None),
     skip_llm: bool = Form(False),
     start_ts: Optional[float] = Form(None),
+    end_ts: Optional[float] = Form(None),
     stroke_type: Optional[str] = Form(None),
     click_ts: Optional[float] = Form(None),
 ):
@@ -30,7 +31,8 @@ async def create_job(
 
     target = (cx, cy) if cx is not None and cy is not None else None
     kwargs = dict(target_player=target, skip_llm=skip_llm,
-                  start_ts=start_ts, stroke_type=stroke_type, click_ts=click_ts)
+                  start_ts=start_ts, end_ts=end_ts, stroke_type=stroke_type,
+                  click_ts=click_ts)
 
     if source_id:
         # 来自 B站链接：视频已在 /api/sources 下载好，直接引用其本地文件
@@ -49,7 +51,7 @@ async def create_job(
         tmp.write(await video.read())
         tmp_path = tmp.name
     try:
-        job_id = job_manager.create(tmp_path, filename, **kwargs)
+        job_id = job_manager.create(tmp_path, filename, delete_video=True, **kwargs)
     finally:
         try:
             os.unlink(tmp_path)  # create() 内已同步拷入 job 目录

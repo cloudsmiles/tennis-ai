@@ -1,21 +1,23 @@
 // 顶层状态机：source（上传 / B站链接）→ pick → progress → results。
 //
-// 开始分析前先查通义千问登录态；未登录则弹提示、打开登录窗口并回到选人
-// 页面（不建任务）。任务通过 SSE 跟踪进度，终结 stage（done / error /
-// login_required）后分别落到结果页 / 结果页（红色错误信息）/ 登录提示。
+// 开始分析前先查通义千问登录态；未登录则弹出站内登录框（手机号+验证码，
+// 浏览器在后端无头运行、用户无感），登录成功后自动续跑。任务通过 SSE 跟踪
+// 进度，终结 stage（done / error / login_required / captcha_required）分别
+// 落到结果页 / 结果页（错误条）/ 登录框 / 风控提示。
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   createJob,
   getLoginStatus,
   getResult,
-  login,
   sourceVideoUrl,
   streamEvents,
 } from "./api";
 import type { JobResult, ProgressEvent } from "./types";
+import AccountPanel from "./components/AccountPanel";
 import PlayerPicker, { type AnalyzeOpts } from "./components/PlayerPicker";
 import Progress from "./components/Progress";
+import QianwenLogin from "./components/QianwenLogin";
 import Results from "./components/Results";
 import SourcePicker from "./components/SourcePicker";
 import {
@@ -31,13 +33,45 @@ import {
 
 type Screen = "source" | "pick" | "progress" | "results";
 
+/** 千问登录态：unknown=尚未确知（后端浏览器可能还没起，不代表未登录） */
+type LoginState = "unknown" | "in" | "out";
+
+function AccountChip({ state, onClick }: { state: LoginState; onClick: () => void }) {
+  const map = {
+    unknown: { dot: "#9ca3af", text: "千问账号", border: "#d1d5db", fg: colors.muted },
+    in: { dot: "#16a34a", text: "千问已登录", border: "#bbf7d0", fg: "#166534" },
+    out: { dot: "#d97706", text: "千问未登录", border: "#fde68a", fg: "#92400e" },
+  }[state];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        padding: "6px 13px",
+        fontSize: 13,
+        fontWeight: 600,
+        borderRadius: 999,
+        border: `1px solid ${map.border}`,
+        background: "#fff",
+        color: map.fg,
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: map.dot }} />
+      {map.text}
+    </button>
+  );
+}
+
 type MediaRef =
   | { kind: "file"; file: File }
   | { kind: "source"; sourceId: string }
   | null;
-
-const LOGIN_ALERT =
-  "通义千问未登录，点击确定后在弹出的浏览器中登录，登录完成后请重新点击分析";
 
 const EMPTY_EVENT: ProgressEvent = { progress: 0, stage: "", message: "" };
 
@@ -134,9 +168,14 @@ export default function App() {
   const [evt, setEvt] = useState<ProgressEvent>(EMPTY_EVENT);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [loginState, setLoginState] = useState<LoginState>("unknown");
 
   // SSE 关闭函数；卸载组件时确保断流
   const closeRef = useRef<(() => void) | null>(null);
+  // 登录成功后要自动续跑的那次分析参数（未登录预检拦截 / 任务中途要求登录）
+  const pendingOptsRef = useRef<AnalyzeOpts | null>(null);
   useEffect(() => {
     return () => {
       closeRef.current?.();
@@ -195,68 +234,93 @@ export default function App() {
     }
   };
 
-  const handleLoginRequired = async (msg: string) => {
-    try {
-      await login();
-    } catch (e) {
-      setError(`打开登录窗口失败：${errText(e)}`);
-    }
-    setNotice(
-      `${msg || "通义千问未登录"}。已在服务端重新打开登录窗口，` +
-        "请完成登录后重新点击分析。",
-    );
-    setScreen("pick");
+  // 建任务并订阅进度（登录预检通过 / 登录成功后续跑都走这里）。
+  const runJob = async (o: AnalyzeOpts) => {
+    if (!media) return;
+    const source =
+      media.kind === "file"
+        ? { file: media.file }
+        : { sourceId: media.sourceId };
+    const jid = await createJob(source, {
+      cx: o.cx,
+      cy: o.cy,
+      clickTs: o.clickTs,
+      startTs: o.startTs,
+      endTs: o.endTs,
+      strokeType: o.strokeType,
+      skipLlm: o.preview,
+    });
+    setJobId(jid);
+    setJob(null);
+    setEvt({ progress: 0, stage: "queued", message: "任务已创建，等待分析…" });
+    setScreen("progress");
+
+    const close = streamEvents(jid, (e) => {
+      setEvt(e);
+      if (e.stage === "done" || e.stage === "error") {
+        close();
+        closeRef.current = null;
+        void loadResult(jid);
+      } else if (e.stage === "login_required" || e.stage === "captcha_required") {
+        close();
+        closeRef.current = null;
+        if (e.stage === "captcha_required") {
+          // 第三方风控：登录态可能仍有效，不弹登录框，提示稍后在本页重跑
+          setNotice(e.message || "通义千问要求安全验证，请稍后重试");
+          setScreen("pick");
+        } else {
+          setLoginState("out");
+          setLoginOpen(true);
+          setScreen("pick");
+        }
+      }
+    });
+    closeRef.current = close;
   };
 
-  // 第 2 步确认后开始分析。
+  // 第 2 步确认后开始分析；完整分析需先登录千问（预览关键帧不需要）。
   const startAnalysis = async (o: AnalyzeOpts) => {
     if (!media) return;
     setNotice(null);
     setError(null);
+    pendingOptsRef.current = o;
     try {
       if (!o.preview) {
-        const loggedIn = await getLoginStatus();
+        // ensure=true：服务刚启动、浏览器未起时也能按持久 cookie 得到真实状态
+        let loggedIn = false;
+        try {
+          const st = await getLoginStatus(true);
+          // busy（浏览器正忙，能分析即说明登录有效）时按已登录放行
+          loggedIn = st.logged_in || st.busy;
+        } catch {
+          loggedIn = false;
+        }
+        setLoginState(loggedIn ? "in" : "out");
         if (!loggedIn) {
-          window.alert(LOGIN_ALERT);
-          await login();
-          setScreen("pick");
+          setLoginOpen(true); // 登录成功后 onLoginSuccess 自动续跑
           return;
         }
       }
-
-      const source =
-        media.kind === "file"
-          ? { file: media.file }
-          : { sourceId: media.sourceId };
-      const jid = await createJob(source, {
-        cx: o.cx,
-        cy: o.cy,
-        clickTs: o.clickTs,
-        startTs: o.startTs,
-        strokeType: o.strokeType,
-        skipLlm: o.preview,
-      });
-      setJobId(jid);
-      setJob(null);
-      setEvt({ progress: 0, stage: "queued", message: "任务已创建，等待分析…" });
-      setScreen("progress");
-
-      const close = streamEvents(jid, (e) => {
-        setEvt(e);
-        if (e.stage === "done" || e.stage === "error") {
-          close();
-          closeRef.current = null;
-          void loadResult(jid);
-        } else if (e.stage === "login_required") {
-          close();
-          closeRef.current = null;
-          void handleLoginRequired(e.message);
-        }
-      });
-      closeRef.current = close;
+      await runJob(o);
     } catch (e) {
       setError(`无法开始分析：${errText(e)}`);
       setScreen("pick");
+    }
+  };
+
+  // 站内登录成功：关闭模态，若有一次待分析任务则自动续跑。
+  const onLoginSuccess = async () => {
+    setLoginOpen(false);
+    setLoginState("in");
+    setNotice(null);
+    const o = pendingOptsRef.current;
+    if (o) {
+      try {
+        await runJob(o);
+      } catch (e) {
+        setError(`无法开始分析：${errText(e)}`);
+        setScreen("pick");
+      }
     }
   };
 
@@ -279,9 +343,14 @@ export default function App() {
   return (
     <div style={page}>
       <div style={shell}>
-        <h1 style={appTitle}>网球 AI 视频分析</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <h1 style={appTitle}>网球 AI 视频分析</h1>
+          <div style={{ marginLeft: "auto" }}>
+            <AccountChip state={loginState} onClick={() => setAccountOpen(true)} />
+          </div>
+        </div>
         <p style={appSubtitle}>
-          上传视频或粘贴 B站链接，选择动作并定位球员，自动截取关键帧，由通义千问给出评分与纠错建议。
+          上传网球视频，框出一次挥拍，AI 自动截取关键帧，并由通义千问点评。
         </p>
         <div style={{ ...card, marginTop: 20 }}>
           <StepIndicator active={stepIndex} />
@@ -330,6 +399,20 @@ export default function App() {
           </div>
         ) : null}
       </div>
+
+      {loginOpen ? (
+        <QianwenLogin
+          onClose={() => setLoginOpen(false)}
+          onSuccess={() => void onLoginSuccess()}
+        />
+      ) : null}
+
+      {accountOpen ? (
+        <AccountPanel
+          onClose={() => setAccountOpen(false)}
+          onStatusChange={(s) => setLoginState(s)}
+        />
+      ) : null}
     </div>
   );
 }
