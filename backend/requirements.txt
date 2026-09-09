@@ -1,0 +1,11 @@
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+python-multipart==0.0.*
+numpy==1.26.*
+opencv-python-headless==4.10.*
+ultralytics==8.3.*
+playwright==1.47.*
+yt-dlp==2026.8.*
+pydantic==2.9.*
+pytest==8.3.*
+opencv-python==4.10.*
